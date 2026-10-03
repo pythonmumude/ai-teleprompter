@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>提词器 · 能力探针</title>
+<style>
+  :root{--sa-top:env(safe-area-inset-top,44px)}
+  *{box-sizing:border-box}
+  body{margin:0;background:#141414;color:#eee;font-size:14px;line-height:1.6;
+    font-family:-apple-system,"PingFang SC",sans-serif;
+    padding:calc(var(--sa-top) + 14px) 16px 40px}
+  h1{font-size:17px;font-weight:500;margin:0 0 6px}
+  p.hint{font-size:12.5px;color:#9a9a9a;margin:0 0 14px}
+  button{appearance:none;border:0;border-radius:12px;padding:14px;font-size:16px;
+    font-weight:500;width:100%;background:#fff;color:#111;margin-bottom:10px}
+  button.ghost{background:#242424;color:#ddd}
+  button:disabled{opacity:.45}
+  video{width:100%;max-height:26vh;background:#000;border-radius:10px;
+    object-fit:cover;margin-bottom:12px}
+  table{width:100%;border-collapse:collapse;font-size:12.5px;margin-bottom:14px}
+  td{padding:6px 4px;border-bottom:1px solid #262626;vertical-align:top}
+  td.k{color:#9a9a9a;width:38%}
+  td.v{color:#eee;word-break:break-all}
+  .ok{color:#9FE1CB}.bad{color:#F7C1C1}.warn{color:#FAC775}
+  #sum{background:#1a1a1a;border-radius:10px;padding:12px;font-size:12px;
+    white-space:pre-wrap;color:#cfcfcf;margin-top:8px;word-break:break-all}
+  .grp{font-size:12px;color:#7d7d7d;margin:16px 0 4px}
+  a{color:#85B7EB}
+</style>
+</head>
+<body>
+<h1>能力探针</h1>
+<p class="hint">在 iPhone 上跑一遍，量出真实能力再决定参数 —— 别猜。
+全程约 25 秒，最后会录一段 6 秒视频并上传到电脑，验证分片链路和实际码率。</p>
+<video id="cam" autoplay muted playsinline></video>
+<button id="go">开始探测</button>
+<button class="ghost" id="copy">复制结果</button>
+<div id="out"></div>
+<div id="sum">尚未开始</div>
+<p class="hint" style="margin-top:16px">
+  注意：本页会**多次**调用 getUserMedia（每次换一个分辨率）。
+  iOS 上第二次调用会干掉上一条音轨，所以每次都必须先把上一条彻底停掉 ——
+  这正是正式提词页绝不敢这么干、只调一次的原因。
+  <br><a href="index.html">← 回到提词页</a>
+</p>
+<script>
+const CANDS = [
+  "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
+  "video/mp4;codecs=h264,aac", "video/mp4",
+  "video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm",
+];
+const RES = [
+  [1440, 1080, "4:3 1440×1080"],
+  [1920, 1080, "16:9 1080p"],
+  [3840, 2160, "16:9 4K"],
+];
+const $ = (id) => document.getElementById(id);
+let rows = [], cur = null;
+
+// 与 capture.js 保持一致：iPadOS 13+ 的 Safari 伪装成 Mac，要连 maxTouchPoints 一起判。
+// 探针页必须用和生产页完全一样的约束，否则测出来的能力不等于真实表现。
+const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
+  || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+
+function add(group, k, v, cls) {
+  rows.push({ group, k, v: String(v), cls: cls || "" });
+  render();
+}
+function render() {
+  let g = "", html = "";
+  for (const r of rows) {
+    if (r.group !== g) { g = r.group; html += `<tr><td class="k" colspan="2" style="color:#7d7d7d">${g}</td></tr>`; }
+    html += `<tr><td class="k">${r.k}</td><td class="v ${r.cls}">${r.v}</td></tr>`;
+  }
+  $("out").innerHTML = "<table>" + html + "</table>";
+}
+async function stopStream() {
+  if (cur) { cur.getTracks().forEach(t => t.stop()); cur = null; }
+  await new Promise(r => setTimeout(r, 400));   // 给 iOS 一点时间释放设备
+}
+
+async function probe() {
+  const btn = $("go"); btn.disabled = true;
+  rows = []; render();
+  const summary = [];
+
+  add("环境", "页面协议", location.protocol + "//" + location.host);
+  add("环境", "安全上下文 isSecureContext", window.isSecureContext,
+      window.isSecureContext ? "ok" : "bad");
+  add("环境", "mediaDevices 存在", !!navigator.mediaDevices,
+      navigator.mediaDevices ? "ok" : "bad");
+  add("环境", "MediaRecorder 存在", typeof MediaRecorder !== "undefined",
+      typeof MediaRecorder !== "undefined" ? "ok" : "bad");
+  add("环境", "wakeLock 支持", "wakeLock" in navigator,
+      ("wakeLock" in navigator) ? "ok" : "warn");
+  add("环境", "standalone（已加到主屏）",
+      window.navigator.standalone === true);
+  if (!navigator.mediaDevices) {
+    add("环境", "结论", "非 HTTPS，摄像头麦克风拿不到，后面没法测", "bad");
+    btn.disabled = false; return;
+  }
+
+  add("编码", "MediaRecorder 支持的 mimeType", "");
+  let picked = "";
+  for (const c of CANDS) {
+    let sup = false;
+    try { sup = MediaRecorder.isTypeSupported(c); } catch (e) {}
+    if (sup && !picked) picked = c;
+    add("编码", c, sup ? "支持" : "—", sup ? "ok" : "");
+  }
+  add("编码", "实际会用的", picked || "（都不支持）", picked ? "ok" : "bad");
+  summary.push("mime=" + picked);
+
+  // ---- 逐分辨率试 ----
+  for (const [w, h, label] of RES) {
+    await stopStream();
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: "user" },
+                 width: { ideal: w }, height: { ideal: h },
+                 frameRate: { ideal: 30 }, aspectRatio: { ideal: w / h } },
+        audio: { echoCancellation: false, noiseSuppression: false,
+                 autoGainControl: IS_IOS, channelCount: 1 },
+      });
+      cur = s;
+      const v = s.getVideoTracks()[0].getSettings();
+      const a = s.getAudioTracks()[0].getSettings();
+      const match = (v.width === w && v.height === h);
+      add("分辨率·" + label, "实得", `${v.width}×${v.height} @${v.frameRate || "?"}fps`,
+          match ? "ok" : "warn");
+      add("分辨率·" + label, "宽高比", (v.width / v.height).toFixed(3) +
+          (Math.abs(v.width / v.height - w / h) < 0.02 ? "（符合）" : "（被改了）"),
+          Math.abs(v.width / v.height - w / h) < 0.02 ? "ok" : "warn");
+      add("分辨率·" + label, "音频", `${a.sampleRate || "?"}Hz ${a.channelCount || "?"}ch`,
+          "");
+      add("分辨率·" + label, "摄像头 deviceId/label",
+          (v.deviceId || "?").slice(0, 18) + " / " + (s.getVideoTracks()[0].label || "空"),
+          (s.getVideoTracks()[0].label ? "" : "warn"));
+      if (label.startsWith("4:3")) summary.push(`4:3 实得 ${v.width}x${v.height}`);
+    } catch (e) {
+      add("分辨率·" + label, "失败", e.name + " " + e.message, "bad");
+      summary.push(label + "失败:" + e.name);
+    }
+  }
+
+  // ---- 实测码率 + 分片上传 ----
+  await stopStream();
+  try {
+    const s = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: "user" },
+               width: { ideal: 1440 }, height: { ideal: 1080 },
+               frameRate: { ideal: 30 } },
+      audio: { echoCancellation: false, noiseSuppression: false,
+               autoGainControl: IS_IOS, channelCount: 1 },
+    });
+    cur = s;
+    $("cam").srcObject = s; $("cam").muted = true;
+    await $("cam").play().catch(() => {});
+
+    const sid = "probe" + Date.now().toString(36);
+    await fetch("/api/rec/" + sid + "/begin?mime=" + encodeURIComponent(picked),
+                { method: "POST" });
+    const parts = [];
+    let seq = 0;
+    const rec = new MediaRecorder(s, picked ? { mimeType: picked } : {});
+    rec.ondataavailable = async (e) => {
+      if (!e.data || !e.data.size) return;
+      seq++;
+      parts.push({ seq, size: e.data.size });
+      try {
+        await fetch("/api/rec/" + sid + "/" + seq, { method: "POST", body: e.data });
+      } catch (err) { add("录像", "分片 " + seq + " 上传失败", err.message, "bad"); }
+    };
+    const t0 = performance.now();
+    rec.start(3000);                       // 3 秒一片
+    await new Promise(r => setTimeout(r, 6200));
+    await new Promise(r => { rec.onstop = r; rec.stop(); });
+    const dur = (performance.now() - t0) / 1000;
+    const bytes = parts.reduce((a, b) => a + b.size, 0);
+    const mbps = (bytes * 8 / dur / 1e6);
+    add("录像实测", "分片", parts.map(p => p.seq + ":" + (p.size / 1048576).toFixed(1) + "MB").join("  "));
+    add("录像实测", "总字节", (bytes / 1048576).toFixed(1) + " MB / " + dur.toFixed(1) + "s");
+    add("录像实测", "实测码率", mbps.toFixed(2) + " Mbps",
+        mbps >= 5 ? "ok" : "warn");
+    summary.push(`码率 ${mbps.toFixed(1)}Mbps`);
+
+    const fin = await (await fetch("/api/rec/" + sid + "/finalize", { method: "POST" })).json();
+    add("录像实测", "拼接结果",
+        `${fin.parts} 片 / 成品时长 ${fin.durationS}s` + (fin.error ? " / " + fin.error : ""),
+        fin.error ? "warn" : "ok");
+    add("录像实测", "下载成品", `<a href="/api/rec/${sid}/file">点这里</a>`);
+
+    // 音频采集链路
+    const AC = window.AudioContext || window.webkitAudioContext;
+    const ctx = new AC();
+    await ctx.audioWorklet.addModule("pcm-worklet.js");
+    const node = new AudioWorkletNode(ctx, "pcm-16k",
+      { processorOptions: { targetRate: 16000, frameMs: 100 } });
+    const src = ctx.createMediaStreamSource(s);
+    const mute = ctx.createGain(); mute.gain.value = 0;
+    src.connect(node); node.connect(mute); mute.connect(ctx.destination);
+    let got = 0, dbLast = 0;
+    node.port.onmessage = (e) => {
+      if (e.data.type === "ready") {
+        add("音频链路", "重采样", e.data.inputRate + "Hz → " + e.data.outputRate +
+            "Hz（步长 " + e.data.step + "）", "ok");
+        summary.push("采集 " + e.data.inputRate + "Hz");
+      } else if (e.data.type === "pcm") { got++; dbLast = e.data.dbfs; }
+    };
+    await new Promise(r => setTimeout(r, 1500));
+    add("音频链路", "1.5s 内收到 100ms 帧", got + " 个（期望约 15）",
+        got >= 12 ? "ok" : "bad");
+    add("音频链路", "当前电平", dbLast + " dBFS", "");
+    summary.push(`音频帧 ${got}/1.5s`);
+    ctx.close();
+  } catch (e) {
+    add("录像实测", "失败", e.name + " " + e.message, "bad");
+  }
+
+  // ---- WebSocket 通路 ----
+  await stopStream();
+  const wscfg = await (await fetch("/api/config")).json().catch(() => ({}));
+  const https = location.protocol === "https:";
+  const wsPort = https ? (wscfg.wsPortPublic || 8444) : (wscfg.wsPort || 8900);
+  const wsUrl = (https ? "wss://" : "ws://") + location.hostname + ":" + wsPort + "/";
+  await new Promise((resolve) => {
+    let done = false;
+    const ws = new WebSocket(wsUrl);
+    const fin = (txt, cls) => { if (!done) { done = true; add("WebSocket", "连接 " + wsUrl, txt, cls); resolve(); } };
+    ws.onopen = () => ws.send(JSON.stringify({ t: "hello", sid: "probe" }));
+    ws.onmessage = (e) => {
+      try {
+        const m = JSON.parse(e.data);
+        if (m.t === "ready") { fin("通了：" + m.model + " @ " + m.device, "ok");
+          summary.push("WS ok / " + m.device); ws.close(); }
+        else if (m.t === "state") fin("通了（已收到状态）", "ok");
+      } catch (_) {}
+    };
+    ws.onerror = () => fin("连不上（检查 tailscale serve 是否映射了 " + wsPort + " 端口）", "bad");
+    ws.onclose = () => fin("建起来了但立刻关闭", "warn");
+    setTimeout(() => fin("5 秒无响应", "bad"), 5000);
+  });
+
+  add("结论", "汇总", summary.join("　|　"));
+  $("sum").textContent = summary.join("\n");
+  btn.disabled = false;
+}
+
+$("go").onclick = probe;
+$("copy").onclick = async () => {
+  const txt = rows.map(r => `${r.group}\t${r.k}\t${r.v}`).join("\n") + "\n---\n" +
+              $("sum").textContent;
+  try { await navigator.clipboard.writeText(txt); $("copy").textContent = "已复制"; }
+  catch (e) { $("sum").textContent = txt; $("copy").textContent = "已显示在下方，手动复制"; }
+};
+</script>
+</body>
+</html>

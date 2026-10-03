@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>提词器 · 调试台</title>
+<style>
+  :root{
+    --bg:#FBFAF7; --panel:#fff; --line:#E6E3DC; --ink:#2C2C2A;
+    --dim:#8A877F; --ok:#0F6E56; --warn:#BA7517; --bad:#A32D2D;
+    --hi:#FAEEDA; --hi2:#E1F5EE;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:13px/1.65 -apple-system,"PingFang SC","Noto Sans SC",sans-serif}
+  header{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+    padding:12px 18px;background:var(--panel);border-bottom:1px solid var(--line);
+    position:sticky;top:0;z-index:5}
+  h1{font-size:15px;font-weight:500;margin:0}
+  .tag{font-size:11.5px;padding:3px 8px;border-radius:999px;
+    background:#F1EFE8;color:var(--dim)}
+  .tag.ok{background:#E1F5EE;color:var(--ok)}
+  .tag.bad{background:#FCEBEB;color:var(--bad)}
+  .tag.warn{background:#FAEEDA;color:var(--warn)}
+  button{font:inherit;font-size:12.5px;padding:6px 12px;border-radius:8px;
+    border:1px solid var(--line);background:#fff;color:var(--ink);cursor:pointer}
+  button:hover{background:#F5F3EE}
+  main{display:grid;grid-template-columns:1fr 380px;gap:14px;padding:14px 18px 40px;
+    align-items:start}
+  @media (max-width:900px){main{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    padding:14px 16px;margin-bottom:14px}
+  .card h2{font-size:13px;font-weight:500;margin:0 0 10px;color:var(--dim)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:10px}
+  .kv{font-size:12px}
+  .kv .k{color:var(--dim);font-size:11.5px}
+  .kv .v{font-variant-numeric:tabular-nums;font-size:15px}
+  .kv .v.small{font-size:12.5px}
+  .cl{display:flex;gap:10px;padding:4px 8px;border-radius:7px;font-size:14px}
+  .cl .n{color:var(--dim);font-size:11px;min-width:22px;text-align:right;
+    font-variant-numeric:tabular-nums;padding-top:2px}
+  .cl .t{flex:1}
+  .cl.cur{background:var(--hi);font-weight:500}
+  .cl.done{color:var(--dim)}
+  .cl .tm{font-size:11px;color:var(--dim);font-variant-numeric:tabular-nums}
+  #stream{font-size:12.5px;max-height:230px;overflow:auto}
+  #stream div{padding:3px 0;border-bottom:1px dashed var(--line)}
+  #stream .fs{color:var(--ok)}
+  #stream .lo{color:var(--warn)}
+  #stream .wa{color:var(--dim)}
+  .bar{height:6px;background:#F1EFE8;border-radius:3px;overflow:hidden;margin-top:6px}
+  .bar i{display:block;height:100%;background:#1D9E75;width:0}
+  .bar.lvl i{background:#378ADD}
+  .note{font-size:11.5px;color:var(--dim);margin-top:8px}
+</style>
+</head>
+<body>
+<header>
+  <h1>提词器调试台</h1>
+  <span class="tag" id="tWs">连接中…</span>
+  <span class="tag" id="tDev">—</span>
+  <span class="tag" id="tRtf">RTF —</span>
+  <span class="tag" id="tFrz">—</span>
+  <span style="flex:1"></span>
+  <button id="bReset">重置到开头</button>
+  <button id="bEnd">收工 flush</button>
+  <button id="bRec">打开成品录像</button>
+</header>
+
+<main>
+  <section>
+    <div class="card">
+      <h2>稿件与高亮</h2>
+      <div id="script" class="note">尚未收到稿件</div>
+    </div>
+    <div class="card">
+      <h2>识别流（最近 16 块）</h2>
+      <div id="stream" class="note">等待音频…</div>
+    </div>
+  </section>
+
+  <section>
+    <div class="card">
+      <h2>对齐</h2>
+      <div class="grid">
+        <div class="kv"><div class="k">进度</div><div class="v" id="vProg">0%</div>
+          <div class="bar"><i id="bProg"></i></div></div>
+        <div class="kv"><div class="k">指针 / 总长</div><div class="v" id="vP">0 / 0</div></div>
+        <div class="kv"><div class="k">当前句</div><div class="v" id="vCl">—</div></div>
+        <div class="kv"><div class="k">本次置信</div><div class="v" id="vConf">—</div></div>
+        <div class="kv"><div class="k">低分 / 空等</div><div class="v" id="vLow">0 / 0</div></div>
+        <div class="kv"><div class="k">重定位 / 回读</div><div class="v" id="vRe">0 / 0</div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>音频与停顿</h2>
+      <div class="grid">
+        <div class="kv"><div class="k">当前电平</div><div class="v" id="vDb">—</div>
+          <div class="bar lvl"><i id="bDb"></i></div></div>
+        <div class="kv"><div class="k">门限</div><div class="v" id="vGate">—</div></div>
+        <div class="kv"><div class="k">状态</div><div class="v small" id="vSpk">—</div></div>
+        <div class="kv"><div class="k">已收音频</div><div class="v" id="vAudio">0s</div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>识别引擎</h2>
+      <div class="grid">
+        <div class="kv"><div class="k">设备</div><div class="v small" id="vDev">—</div></div>
+        <div class="kv"><div class="k">单块耗时</div><div class="v" id="vMs">—</div></div>
+        <div class="kv"><div class="k">p95</div><div class="v" id="vP95">—</div></div>
+        <div class="kv"><div class="k">已解码块</div><div class="v" id="vCh">0</div></div>
+        <div class="kv"><div class="k">丢块</div><div class="v" id="vDrop">0</div></div>
+        <div class="kv"><div class="k">队列积压</div><div class="v" id="vBl">0</div></div>
+      </div>
+      <div class="note" id="err"></div>
+    </div>
+
+    <div class="card">
+      <h2>录像</h2>
+      <div class="grid">
+        <div class="kv"><div class="k">分片</div><div class="v" id="vParts">0</div></div>
+        <div class="kv"><div class="k">累计</div><div class="v" id="vBytes">0MB</div></div>
+        <div class="kv"><div class="k">缺号</div><div class="v" id="vGaps">无</div></div>
+        <div class="kv"><div class="k">成品时长</div><div class="v" id="vDur">—</div></div>
+      </div>
+      <div class="note" id="vRecErr"></div>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let ws = null, retry = 0;
+let clauses = [], cur = -1, seenAt = {};
+let nLow = 0, nWait = 0, nReacq = 0, nRew = 0, nChunk = 0;
+const stream = [];
+
+function wsUrl() {
+  const https = location.protocol === "https:";
+  let port = https ? 8444 : 8900;
+  const q = new URLSearchParams(location.search).get("ws");
+  if (q) port = q;
+  return (https ? "wss://" : "ws://") + location.hostname + ":" + port + "/";
+}
+function tag(el, text, cls) { el.textContent = text; el.className = "tag" + (cls ? " " + cls : ""); }
+
+function connect() {
+  ws = new WebSocket(wsUrl());
+  ws.onopen = () => { retry = 0; tag($("tWs"), "已连接 " + wsUrl(), "ok"); };
+  ws.onclose = () => {
+    tag($("tWs"), "断开，重连中…", "bad");
+    setTimeout(connect, Math.min(5000, 400 * Math.pow(2, retry++)));
+  };
+  ws.onerror = () => tag($("tWs"), "连接出错", "bad");
+  ws.onmessage = (e) => {
+    if (typeof e.data !== "string") return;
+    let m; try { m = JSON.parse(e.data); } catch (_) { return; }
+    if (m.t === "ready") tag($("tDev"), m.model + " @" + m.device, "ok");
+    else if (m.t === "script") { clauses = m.clauses || []; drawScript(); }
+    else if (m.t === "cursor") onCursor(m);
+    else if (m.t === "chunk") onChunk(m);
+    else if (m.t === "state") onState(m);
+    else if (m.t === "rec") onRec(m);
+    else if (m.t === "error") $("err").textContent = "服务端：" + m.msg;
+  };
+}
+
+function onChunk(m) {
+  nChunk++;
+  stream.unshift({ t: new Date().toTimeString().slice(0, 8), asr: m.asr });
+  if (stream.length > 16) stream.pop();
+  const el = $("stream");
+  el.innerHTML = stream.map((s) =>
+    `<div>${s.t}　${esc(s.asr)}</div>`).join("");
+}
+function esc(s) { return String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
+
+function onCursor(m) {
+  if (m.low) nLow++;
+  if (m.waiting) nWait++;
+  if (m.reacquired) nReacq++;
+  if (m.rewound) nRew++;
+  $("vP").textContent = m.p + " / " + (clauses.length ? clauses[clauses.length - 1].normEnd : "?");
+  $("vProg").textContent = (m.progress * 100).toFixed(1) + "%";
+  $("bProg").style.width = Math.min(100, m.progress * 100) + "%";
+  $("vConf").textContent = m.conf.toFixed(2) + (m.low ? " 低" : "") + (m.waiting ? " 空等" : "");
+  $("vLow").textContent = nLow + " / " + nWait;
+  $("vRe").textContent = nReacq + " / " + nRew;
+  tag($("tFrz"), m.frozen ? "已停顿（游标停）" : "跟读中", m.frozen ? "warn" : "ok");
+
+  if (m.clause !== cur) {
+    cur = m.clause;
+    if (!seenAt[cur]) seenAt[cur] = new Date().toTimeString().slice(0, 8);
+    drawScript();
+  }
+}
+
+function drawScript() {
+  if (!clauses.length) return;
+  const html = clauses.map((c) => {
+    const cls = c.i === cur ? "cl cur" : (c.i < cur ? "cl done" : "cl");
+    const tm = seenAt[c.i] ? `<span class="tm">${seenAt[c.i]}</span>` : "";
+    return `<div class="${cls}"><span class="n">${c.i}</span>` +
+           `<span class="t">${esc(c.text)}</span>${tm}</div>`;
+  }).join("");
+  $("script").innerHTML = html;
+  const el = $("script").querySelector(".cl.cur");
+  if (el) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+
+function onState(m) {
+  const a = m.asr || {}, au = m.audio || {}, al = m.align || {}, r = m.rec || {};
+  tag($("tDev"), (a.device || "?") + " · " + (a.loaded ? "已加载" : "未加载"),
+      a.loaded ? "ok" : "");
+  const rtf = a.rtf || 0;
+  tag($("tRtf"), "RTF " + rtf.toFixed(3) + " · " + (a.meanMs || 0) + "ms",
+      rtf > 0.85 ? "bad" : (rtf > 0.5 ? "warn" : "ok"));
+  $("vMs").textContent = (a.lastMs || 0) + " ms";
+  $("vP95").textContent = (a.p95Ms || 0) + " ms";
+  $("vCh").textContent = a.chunks || 0;
+  $("vDrop").textContent = a.dropped || 0;
+  $("vBl").textContent = a.backlog || 0;
+  $("vDrop").style.color = (a.dropped || 0) > 0 ? "var(--bad)" : "";
+  $("err").textContent = a.error ? "⚠️ " + a.error : "";
+
+  const db = au.dbfs ?? -96;
+  $("vDb").textContent = db.toFixed(1) + " dBFS";
+  $("bDb").style.width = Math.max(0, Math.min(100, (db + 60) / 60 * 100)) + "%";
+  $("vGate").textContent = (au.gateDb ?? "-") + " dBFS";
+  $("vSpk").textContent = (au.speaking ? "有声" : "静音") +
+    (au.frozen ? " · 冻结" : "") + " · 帧 " + (au.frames || 0);
+  $("vAudio").textContent = ((au.audioMs || 0) / 1000).toFixed(1) + "s";
+  $("vCl").textContent = cur >= 0 ? "#" + cur : "—";
+
+  $("vParts").textContent = r.parts || 0;
+  $("vBytes").textContent = ((r.bytes || 0) / 1048576).toFixed(1) + " MB";
+  $("vGaps").textContent = (r.gaps && r.gaps.length) ? r.gaps.join(",") : "无";
+  $("vGaps").style.color = (r.gaps && r.gaps.length) ? "var(--bad)" : "";
+  $("vDur").textContent = r.durationS ? r.durationS + "s" : "—";
+  $("vRecErr").textContent = r.final ? "成品：" + r.final : "";
+}
+
+function onRec(m) {
+  if (m.error) $("vRecErr").textContent = "录像：" + m.error;
+  $("vParts").textContent = m.parts || 0;
+  $("vBytes").textContent = ((m.bytes || 0) / 1048576).toFixed(1) + " MB";
+  $("vDur").textContent = m.durationS ? m.durationS + "s" : "—";
+}
+
+$("bReset").onclick = () => ws && ws.send(JSON.stringify({ t: "reset", clause: 0 }));
+$("bEnd").onclick = () => ws && ws.send(JSON.stringify({ t: "end" }));
+$("bRec").onclick = () => window.open("/api/rec/current/file", "_blank");
+setInterval(() => { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ t: "ping", ts: Date.now() })); }, 15000);
+connect();
+</script>
+</body>
+</html>

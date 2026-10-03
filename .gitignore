@@ -1,0 +1,24 @@
+# 录制产物：本机素材，体积大（一次录制几百 MB），不入库
+recordings/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# macOS
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+
+# 临时与日志
+*.log
+*.tmp

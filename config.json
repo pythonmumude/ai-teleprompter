@@ -1,0 +1,70 @@
+{
+  "http": {
+    "host": "127.0.0.1",
+    "port": 8899,
+    "public_port": 8443
+  },
+  "ws": {
+    "host": "127.0.0.1",
+    "port": 8900,
+    "public_port": 8444
+  },
+  "audio": {
+    "sample_rate": 16000,
+    "frame_ms": 100,
+    "chunk_ms": 600,
+    "gate_db": -45,
+    "gate_adaptive": true,
+    "gate_margin_db": 9,
+    "gate_floor_min_db": -50,
+    "gate_floor_max_db": -32,
+    "gate_floor_window_frames": 30,
+    "stop_frames": 3,
+    "resume_frames": 2,
+    "queue_max": 40
+  },
+  "asr": {
+    "model": "paraformer-zh-streaming",
+    "device": "mps",
+    "encoder_chunk_look_back": 4,
+    "decoder_chunk_look_back": 1,
+    "warmup_chunks": 3,
+    "skip_silence": false,
+    "allow_cpu_fallback": true
+  },
+  "align": {
+    "buf_max": 24,
+    "min_buf": 2,
+    "accept_min_buf": 4,
+    "pad": 6,
+    "look": 24,
+    "reacquire_look": 220,
+    "back_look": 200,
+    "max_step": 40,
+    "hi": 0.75,
+    "mid": 0.5,
+    "miss_limit": 3,
+    "stall_limit": 8,
+    "reacquire_score": 0.8,
+    "rewind_score": 0.85,
+    "rewind_votes": 2,
+    "rewind_min_buf": 6
+  },
+  "prompt": {
+    "lead_chars": 3,
+    "extrapolate_alpha": 0.8,
+    "velocity_window_ms": 1500,
+    "min_chars_per_sec": 1.0,
+    "max_chars_per_sec": 12.0,
+    "top_inset_px": 0
+  },
+  "record": {
+    "dir": "recordings",
+    "timeslice_ms": 3000,
+    "video_bits_per_second": null,
+    "width": 1440,
+    "height": 1080,
+    "fps": 30,
+    "keep_parts": true
+  }
+}

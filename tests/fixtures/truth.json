@@ -1,0 +1,181 @@
+{
+ "wav": "say_clauses.wav",
+ "voice": "Tingting",
+ "rate": 175,
+ "gap_ms": 300,
+ "total_s": 50.42,
+ "chars_total": 199,
+ "clauses": [
+  {
+   "clause": 0,
+   "start_ms": 0,
+   "end_ms": 3181,
+   "chars": 14,
+   "text": "很多人以为自律是靠意志力硬扛",
+   "origStart": 0,
+   "origEnd": 14
+  },
+  {
+   "clause": 1,
+   "start_ms": 3481,
+   "end_ms": 4479,
+   "chars": 4,
+   "text": "其实不是",
+   "origStart": 15,
+   "origEnd": 19
+  },
+  {
+   "clause": 2,
+   "start_ms": 4779,
+   "end_ms": 7403,
+   "chars": 12,
+   "text": "意志力是一种会消耗的资源",
+   "origStart": 20,
+   "origEnd": 32
+  },
+  {
+   "clause": 3,
+   "start_ms": 7703,
+   "end_ms": 10420,
+   "chars": 12,
+   "text": "你早上用它拒绝了一次甜点",
+   "origStart": 33,
+   "origEnd": 45
+  },
+  {
+   "clause": 4,
+   "start_ms": 10720,
+   "end_ms": 12903,
+   "chars": 10,
+   "text": "中午就更难拒绝第二次",
+   "origStart": 46,
+   "origEnd": 56
+  },
+  {
+   "clause": 5,
+   "start_ms": 13203,
+   "end_ms": 15293,
+   "chars": 9,
+   "text": "真正能长期坚持的人",
+   "origStart": 57,
+   "origEnd": 66
+  },
+  {
+   "clause": 6,
+   "start_ms": 15593,
+   "end_ms": 16963,
+   "chars": 7,
+   "text": "靠的不是意志力",
+   "origStart": 67,
+   "origEnd": 74
+  },
+  {
+   "clause": 7,
+   "start_ms": 17263,
+   "end_ms": 19515,
+   "chars": 10,
+   "text": "而是把选择提前做完了",
+   "origStart": 75,
+   "origEnd": 85
+  },
+  {
+   "clause": 8,
+   "start_ms": 19815,
+   "end_ms": 22114,
+   "chars": 10,
+   "text": "比如把运动鞋放在门口",
+   "origStart": 86,
+   "origEnd": 96
+  },
+  {
+   "clause": 9,
+   "start_ms": 22414,
+   "end_ms": 24945,
+   "chars": 10,
+   "text": "把手机充电器放在客厅",
+   "origStart": 97,
+   "origEnd": 107
+  },
+  {
+   "clause": 10,
+   "start_ms": 25245,
+   "end_ms": 27498,
+   "chars": 9,
+   "text": "把零食从冰箱里清掉",
+   "origStart": 108,
+   "origEnd": 117
+  },
+  {
+   "clause": 11,
+   "start_ms": 27798,
+   "end_ms": 29980,
+   "chars": 9,
+   "text": "这些动作看起来很小",
+   "origStart": 118,
+   "origEnd": 127
+  },
+  {
+   "clause": 12,
+   "start_ms": 30280,
+   "end_ms": 33136,
+   "chars": 13,
+   "text": "但它们把需要当场做决定的事",
+   "origStart": 128,
+   "origEnd": 141
+  },
+  {
+   "clause": 13,
+   "start_ms": 33436,
+   "end_ms": 35596,
+   "chars": 10,
+   "text": "变成了不需要决定的事",
+   "origStart": 142,
+   "origEnd": 152
+  },
+  {
+   "clause": 14,
+   "start_ms": 35896,
+   "end_ms": 38706,
+   "chars": 13,
+   "text": "所以自律的本质不是对抗自己",
+   "origStart": 153,
+   "origEnd": 166
+  },
+  {
+   "clause": 15,
+   "start_ms": 39006,
+   "end_ms": 40399,
+   "chars": 6,
+   "text": "而是设计环境",
+   "origStart": 167,
+   "origEnd": 173
+  },
+  {
+   "clause": 16,
+   "start_ms": 40699,
+   "end_ms": 43741,
+   "chars": 15,
+   "text": "你不需要变成一个更有意志力的人",
+   "origStart": 174,
+   "origEnd": 189
+  },
+  {
+   "clause": 17,
+   "start_ms": 44041,
+   "end_ms": 47361,
+   "chars": 15,
+   "text": "你只需要让正确的选项变得更容易",
+   "origStart": 190,
+   "origEnd": 205
+  },
+  {
+   "clause": 18,
+   "start_ms": 47661,
+   "end_ms": 50123,
+   "chars": 11,
+   "text": "让错误的选项变得更麻烦",
+   "origStart": 206,
+   "origEnd": 217
+  }
+ ]
+}

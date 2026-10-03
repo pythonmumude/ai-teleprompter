@@ -1,0 +1,30 @@
+# 提词器依赖清单
+#
+# 注意：这套东西跑在 FunASR 的 venv 里（~/.venvs/funasr），
+# 里面**已经装了**下面大部分包，所以通常只需要补 pypinyin 一个。
+#
+#   ~/.venvs/funasr/bin/python -m pip install -r requirements.txt
+#
+# 想确认现状：
+#   ~/.venvs/funasr/bin/python -c "import funasr,torch,websockets,rapidfuzz,pypinyin;print('ok')"
+
+# —— 必装 ——
+funasr>=1.4.0          # 流式 ASR，提供 paraformer-zh-streaming
+torch>=2.5             # funasr 的推理后端；Apple Silicon 版支持 mps
+websockets>=13         # 音频上行 / 游标下行的 WebSocket（已装 17.0.1）
+numpy>=1.26            # 音频缓冲与重采样
+soundfile>=0.12        # 读 wav（回放器、自检用）
+pypinyin>=0.53         # 对齐器的主键：不带声调的拼音，做同音容错
+rapidfuzz>=3.0         # 备用模糊匹配（当前实现自带 LCS，未强依赖）
+
+# —— 可选 ——
+modelscope>=1.20       # 拉模型用；首次下载 paraformer-zh-streaming 需要联网
+cn2an                  # 中文数字的高级读法（「两千零二十四」），P1 才需要
+sounddevice            # 只有走「接力麦克风 / WO Mic」兜底方案时才需要
+
+# —— 不需要 ——
+# FastAPI / uvicorn / Flask 都不需要。HTTP 用标准库 http.server，
+# WebSocket 用 websockets。少两个依赖，少两处能坏的地方。
+#
+# 另外：ffmpeg 是**系统**依赖（录像拼接用），不在 pip 里：
+#   brew install ffmpeg      # 本机已在 /opt/homebrew/bin/ffmpeg

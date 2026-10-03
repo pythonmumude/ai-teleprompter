@@ -1,0 +1,688 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#000000">
+<title>提词器</title>
+<style>
+  :root{
+    --sa-top: env(safe-area-inset-top, 44px);
+    --sa-bottom: env(safe-area-inset-bottom, 20px);
+    --fs: 24px;                 /* 字号，可调 */
+    --lh: 1.6;
+    --band-lines: 5;            /* 默认显示几行。给折行留余量：句子长时会占两行，
+                                   按 4 算的话当前句很容易被切掉半个 */
+    --cl-gap: 6px;              /* 句间间距 */
+    /* 默认带高 = 每句实际高度 × 行数。
+       注意每句还带 margin-bottom（--cl-gap），漏了它最后一行会被切掉半个。 */
+    --band-h: calc((var(--fs) * var(--lh) + var(--cl-gap)) * var(--band-lines) + 20px);
+
+    /* 三态配色：未读灰 → 当前句白色 → 读过的黄色 */
+    --dim: rgba(255,255,255,.42);
+    --cur: #ffffff;
+    --read: #FFD84D;
+    --read-soft: rgba(255,216,77,.58);
+
+    /* 玻璃与描边 */
+    --glass: rgba(16,17,20,.68);
+    --stroke: rgba(255,255,255,.10);
+    --stroke-hi: rgba(255,255,255,.24);
+    --shadow: 0 10px 30px rgba(0,0,0,.45);
+    --r: 18px;
+    --ease: cubic-bezier(.22,.61,.36,1);
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;background:#000;overflow:hidden;
+    overscroll-behavior:none;touch-action:none;
+    font-family:-apple-system,"PingFang SC","Noto Sans SC",sans-serif;
+    -webkit-user-select:none;user-select:none}
+
+  /* 底层：全屏前置摄像头预览 */
+  #cam{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;
+       background:#000;z-index:0}
+
+  /* 提词带：位置和尺寸都由 CSS 变量控制，四角可拖拽
+     （--bx/--by/--bw/--bh 由 JS 在拖拽后写入；不写就走默认值） */
+  #band{position:fixed;z-index:10;
+    left:var(--bx,12px);
+    top:var(--by,calc(var(--sa-top) + 8px));
+    width:var(--bw,calc(100% - 24px));
+    height:var(--bh,var(--band-h));
+    background:var(--glass);
+    -webkit-backdrop-filter:blur(18px) saturate(140%);
+    backdrop-filter:blur(18px) saturate(140%);
+    border:1px solid var(--stroke);
+    border-radius:var(--r);
+    box-shadow:var(--shadow);
+    touch-action:none;
+    transition:box-shadow .25s var(--ease),border-color .25s var(--ease)}
+  #band.dragging{border-color:var(--stroke-hi);box-shadow:0 14px 42px rgba(0,0,0,.6)}
+  /* 歌词裁剪单独一层：带子自身要 overflow:visible，否则四角手柄会被切掉 */
+  #clip{position:absolute;inset:0;overflow:hidden;border-radius:inherit}
+  #lines{position:absolute;left:0;right:0;top:0;
+    padding:10px 20px;will-change:transform}
+
+  .cl{font-size:var(--fs);line-height:var(--lh);color:var(--dim);
+      margin:0 0 var(--cl-gap);font-weight:500;
+      transition:color .22s var(--ease)}
+  .cl.done{color:var(--read-soft)}            /* 已读过的整句：弱化黄 */
+  .cl.cur{color:var(--cur);font-weight:700}   /* 当前句：白 + 加粗 */
+  .wipe{display:inline}
+  /* 句内扫光：背景裁切到文字上做一条连续推进。
+     扫过的地方是黄色（＝读到的），没扫到的还是白色 —— 一眼看出读到哪个字。 */
+  .cl.cur .wipe{
+    background-image:linear-gradient(90deg,
+      var(--read) 0 var(--wipe,0%), var(--cur) var(--wipe,0%) 100%);
+    -webkit-background-clip:text;background-clip:text;
+    -webkit-text-fill-color:transparent;color:transparent}
+  /* 不支持 background-clip 的浏览器：当前句整句白，已读句整句弱黄 */
+  .no-wipe .cl.cur{color:var(--cur)}
+  .no-wipe .cl.done{color:var(--read-soft)}
+
+  /* 四角手柄：常驻低对比，拖动时变黄放大 */
+  .h{position:absolute;width:42px;height:42px;z-index:3;touch-action:none;
+     display:flex;align-items:center;justify-content:center}
+  .h::after{content:"";width:11px;height:11px;border-radius:50%;
+    background:rgba(255,255,255,.40);
+    box-shadow:0 0 0 1.5px rgba(0,0,0,.32);
+    transition:background .18s var(--ease),transform .18s var(--ease)}
+  .h.active::after{background:var(--read);transform:scale(1.3)}
+  .h.nw{left:-9px;top:-9px}
+  .h.ne{right:-9px;top:-9px}
+  .h.sw{left:-9px;bottom:-9px}
+  .h.se{right:-9px;bottom:-9px}
+
+  /* HUD 状态条：紧贴提词带下沿 */
+  #hud{position:fixed;z-index:30;left:12px;right:12px;
+    top:calc(var(--by, calc(var(--sa-top) + 8px)) + var(--bh, var(--band-h)) + 10px);
+    display:flex;gap:6px;flex-wrap:wrap;justify-content:center;pointer-events:none}
+  .chip{font-size:11px;padding:4px 9px;border-radius:999px;
+    background:rgba(0,0,0,.5);color:rgba(255,255,255,.72);
+    border:1px solid transparent;
+    -webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
+  .chip.bad{color:#F7C1C1;border-color:rgba(226,75,74,.55)}
+  .chip.good{color:#9FE1CB;border-color:rgba(93,202,165,.35)}
+
+  /* 跑道条 */
+  #meter{position:fixed;left:16px;right:16px;bottom:calc(var(--sa-bottom) + 56px);
+    z-index:20;height:3px;border-radius:2px;background:rgba(255,255,255,.14)}
+  #meterP{position:absolute;left:0;top:0;bottom:0;background:rgba(255,255,255,.55);
+    border-radius:2px;width:0;transition:width .3s linear}
+  #meterD{position:absolute;top:-3px;width:2px;height:9px;background:var(--read);
+    border-radius:1px;left:0}
+
+  /* 底部控制 */
+  #ctrl{position:fixed;left:0;right:0;bottom:calc(var(--sa-bottom) + 8px);
+    z-index:20;display:flex;gap:7px;justify-content:center;flex-wrap:wrap;
+    padding:0 12px}
+  .pill{appearance:none;border:1px solid rgba(255,255,255,.20);
+    background:rgba(0,0,0,.55);color:rgba(255,255,255,.86);
+    font-size:13px;padding:8px 14px;border-radius:999px;
+    -webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
+    transition:background .18s var(--ease),color .18s var(--ease),
+               border-color .18s var(--ease),transform .12s var(--ease)}
+  .pill:active{transform:scale(.95)}
+  .pill.warn{border-color:rgba(226,75,74,.6);color:#F7C1C1}
+  .pill.on{background:rgba(255,255,255,.92);color:#111;border-color:#fff}
+  .pill.icon{font-size:14px;font-weight:600;padding:8px 12px;min-width:44px}
+  .fsval{font-size:12px;color:rgba(255,255,255,.55);min-width:22px;
+    text-align:center;align-self:center;
+    font-variant-numeric:tabular-nums}
+
+  /* 设置面板 */
+  #setup{position:fixed;inset:0;z-index:40;display:none;
+    background:#101114;color:#eee;overflow:auto;-webkit-overflow-scrolling:touch;
+    padding:calc(var(--sa-top) + 18px) 18px calc(var(--sa-bottom) + 18px)}
+  #setup.show{display:block}
+  #setup h1{font-size:18px;font-weight:600;margin:0 0 6px}
+  #setup h1 span{color:var(--read)}
+  #setup p{font-size:12.5px;line-height:1.75;color:#8d8d92;margin:6px 0 14px}
+  textarea{width:100%;height:32vh;background:#1a1b1f;color:#eee;
+    border:1px solid #2c2d33;border-radius:14px;padding:13px;font-size:15px;
+    line-height:1.7;resize:none;font-family:inherit;outline:none;
+    transition:border-color .2s var(--ease)}
+  textarea:focus{border-color:#3d3e46}
+  .card{background:#16171b;border:1px solid #24252b;border-radius:16px;
+    padding:14px;margin:12px 0}
+  .btn{appearance:none;border:0;border-radius:14px;padding:15px;
+    font-size:16px;font-weight:600;width:100%;background:#fff;color:#111;
+    transition:transform .12s var(--ease),opacity .18s var(--ease)}
+  .btn:active{transform:scale(.98)}
+  .btn.ghost{background:#232429;color:#ddd}
+  .btn.danger{background:#2a1717;color:#F7C1C1;border:1px solid rgba(226,75,74,.4)}
+  .row{display:flex;align-items:center;gap:10px;margin:12px 0;font-size:13px;color:#b6b6bb}
+  .row>span:first-child{width:64px;flex:none}
+  .row input[type=range]{flex:1;-webkit-appearance:none;height:4px;border-radius:2px;
+    background:#33343a;outline:none}
+  .row input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;
+    width:20px;height:20px;border-radius:50%;background:#fff;
+    box-shadow:0 1px 4px rgba(0,0,0,.5)}
+  .kv{font-size:11.5px;color:#71717a;line-height:1.8;
+    background:#16171b;border-radius:10px;padding:10px;margin-top:10px;
+    white-space:pre-wrap;word-break:break-all}
+  #log{font-size:11px;color:#5f6067;margin-top:10px;line-height:1.75;
+    max-height:15vh;overflow:auto}
+  a{color:#85B7EB}
+
+  /* 录制审阅 */
+  #review{position:fixed;inset:0;z-index:60;display:none;
+    background:rgba(0,0,0,.74);
+    -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);
+    padding:calc(var(--sa-top) + 16px) 16px calc(var(--sa-bottom) + 16px);
+    flex-direction:column;justify-content:center}
+  #review.show{display:flex}
+  .sheet{background:#141518;border:1px solid var(--stroke);border-radius:22px;
+    padding:18px;width:100%;max-width:520px;margin:0 auto;
+    box-shadow:0 20px 50px rgba(0,0,0,.6)}
+  .sheet h2{font-size:16px;font-weight:600;margin:0 0 4px;
+    display:flex;align-items:center;gap:8px}
+  .sheet h2 i{width:8px;height:8px;border-radius:50%;background:var(--read);
+    font-style:normal;flex:none}
+  .sheet .m{font-size:12px;color:#82828a;margin-bottom:12px;
+    font-variant-numeric:tabular-nums}
+  #rvVid{width:100%;max-height:40vh;border-radius:14px;background:#000;
+    display:block;outline:none}
+  .sheet-ft{display:flex;gap:10px;margin-top:14px}
+  .sheet-ft .btn{margin-top:0;font-size:15px;padding:14px}
+  .rv-err{font-size:12.5px;color:#F7C1C1;background:#241618;
+    border:1px solid rgba(226,75,74,.3);border-radius:12px;
+    padding:10px;margin-bottom:12px;line-height:1.6}
+</style>
+</head>
+<body>
+<video id="cam" autoplay muted playsinline webkit-playsinline></video>
+
+<div id="band">
+  <div id="clip"><div id="lines"></div></div>
+  <div class="h nw" data-h="nw"></div>
+  <div class="h ne" data-h="ne"></div>
+  <div class="h sw" data-h="sw"></div>
+  <div class="h se" data-h="se"></div>
+</div>
+
+<div id="hud">
+  <span class="chip" id="chipWs">未连接</span>
+  <span class="chip" id="chipAsr">识别待命</span>
+  <span class="chip" id="chipLvl">电平 --</span>
+  <span class="chip" id="chipRec">未录像</span>
+</div>
+
+<div id="meter"><div id="meterP"></div><div id="meterD"></div></div>
+
+<div id="ctrl">
+  <button class="pill icon" id="btnFsDown">A−</button>
+  <span class="fsval" id="fsNow">24</span>
+  <button class="pill icon" id="btnFsUp">A＋</button>
+  <button class="pill" id="btnPause">暂停</button>
+  <button class="pill" id="btnReset">重置</button>
+  <button class="pill" id="btnSetup">设置</button>
+  <button class="pill warn" id="btnStop">停止</button>
+</div>
+
+<!-- 录制完成后的审阅：先看一眼，再决定留还是丢 -->
+<div id="review">
+  <div class="sheet">
+    <h2><i></i>录制完成</h2>
+    <div class="m" id="rvMeta">—</div>
+    <div class="rv-err" id="rvErr" style="display:none"></div>
+    <video id="rvVid" controls playsinline preload="metadata"></video>
+    <div class="sheet-ft">
+      <button class="btn danger" id="btnDrop">丢弃</button>
+      <button class="btn" id="btnKeep">保存</button>
+    </div>
+  </div>
+</div>
+
+<div id="setup" class="show">
+  <h1>AI 实时跟读<span>提词器</span></h1>
+  <p>粘贴口播稿 → 点「开始提词」。摄像头和麦克风必须在这一次授权里一起给，
+     所以只弹一次权限框。<br>
+     需要 HTTPS（Tailscale 域名）才能拿到摄像头，局域网 http 地址在 iPhone 上会被拒。</p>
+  <textarea id="script" placeholder="把口播稿粘到这里……" autocomplete="off"
+    autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
+
+  <div class="card">
+    <div class="row"><span>字号</span>
+      <input type="range" id="fs" min="14" max="72" step="1" value="24">
+      <span id="fsv" style="width:44px;text-align:right">24</span></div>
+    <div class="row"><span>预读量</span>
+      <input type="range" id="lead" min="-4" max="10" step="1" value="3">
+      <span id="leadv" style="width:44px;text-align:right">+3 字</span></div>
+    <p style="margin:2px 0 10px">预读量是「高亮跑在声音前面几个字」。
+       实测光标中位落后说话人 2.5 字，设 +3 基本抵消，眼睛更舒服。</p>
+    <div class="row"><span>提词带</span>
+      <button class="pill" id="btnBandReset" style="flex:1">恢复默认位置和大小</button></div>
+    <p style="margin:2px 0 0">提词带可以用四角的小圆点拖拽缩放，直接拖带子本体可以移动。</p>
+  </div>
+
+  <button class="btn" id="btnStart">开始提词</button>
+  <button class="btn ghost" id="btnResume">继续（已有会话）</button>
+  <p style="margin-top:14px">先跑一遍 <a href="probe.html">能力探针</a>，
+     可以量出这台 iPhone 的真实分辨率/码率，不用猜。</p>
+  <div class="kv" id="kv">尚未开始</div>
+  <div id="log"></div>
+</div>
+
+<script src="prompt.js"></script>
+<script src="capture.js"></script>
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const els = { band: $("band"), lines: $("lines") };
+  const scriptEl = $("script");
+  const kv = $("kv"), logEl = $("log");
+
+  let cfg = { prompt: {}, record: {}, audio: {}, wsPort: 8788, wsPortPublic: 8444 };
+  let prompter = null, capture = null, scriptText = "";
+  let paused = false;              // 暂停跟随（人想停下来看一眼稿子）
+  let lastState = null;
+
+  // ---- 本地持久化：稿件和偏好，刷新不丢 ----
+  const LS = {
+    get(k, d) { try { const v = localStorage.getItem("tp." + k); return v === null ? d : v; } catch (_) { return d; } },
+    set(k, v) { try { localStorage.setItem("tp." + k, v); } catch (_) {} },
+  };
+  scriptEl.value = LS.get("script", "");
+  $("fs").value = LS.get("fs", "24");
+  $("lead").value = LS.get("lead", "3");
+
+  function log(s) {
+    const t = new Date().toTimeString().slice(0, 8);
+    logEl.textContent = "[" + t + "] " + s + "\n" + logEl.textContent;
+    if (logEl.textContent.length > 4000) logEl.textContent = logEl.textContent.slice(0, 4000);
+  }
+
+  function applyPrefs() {
+    const fs = parseInt($("fs").value, 10);
+    document.documentElement.style.setProperty("--fs", fs + "px");
+    $("fsv").textContent = fs;
+    $("fsNow").textContent = fs;
+    const lead = parseInt($("lead").value, 10);
+    $("leadv").textContent = (lead >= 0 ? "+" : "") + lead + " 字";
+    if (prompter) {
+      prompter.setLead(lead);
+      // 字号变了行高跟着变，必须重新量一次，否则滚动定位会偏
+      prompter.measure();
+      if (prompter.curIdx >= 0) prompter.scrollTo(prompter.curIdx, false);
+    }
+    LS.set("fs", fs);
+    LS.set("lead", lead);
+  }
+  $("fs").oninput = applyPrefs;
+  $("lead").oninput = applyPrefs;
+
+  // 运行中也能调字号：底部常驻的 A− / A＋
+  function bumpFont(delta) {
+    const cur = parseInt($("fs").value, 10) || 24;
+    const next = Math.max(14, Math.min(72, cur + delta));
+    if (next === cur) return;
+    $("fs").value = next;
+    applyPrefs();
+  }
+  $("btnFsDown").onclick = () => bumpFont(-2);
+  $("btnFsUp").onclick = () => bumpFont(2);
+
+  function chip(id, text, cls) {
+    const el = $(id);
+    el.textContent = text;
+    el.className = "chip" + (cls ? " " + cls : "");
+  }
+
+  // ================= 提词带：拖动 + 四角缩放 =================
+  //
+  // 位置尺寸写进 CSS 变量并持久化。不写变量时走 CSS 默认值（自适应全宽），
+  // 这样「用户没动过」和「用户调过」是两种状态，恢复默认只需清掉变量。
+  const BAND_MIN_W = 200, BAND_MIN_H = 84;
+  const band = els.band;
+
+  function bandBox() {
+    const r = band.getBoundingClientRect();
+    return { x: r.left, y: r.top, w: r.width, h: r.height };
+  }
+
+  function setBand(box) {
+    const root = document.documentElement.style;
+    root.setProperty("--bx", Math.round(box.x) + "px");
+    root.setProperty("--by", Math.round(box.y) + "px");
+    root.setProperty("--bw", Math.round(box.w) + "px");
+    root.setProperty("--bh", Math.round(box.h) + "px");
+  }
+
+  function saveBand() {
+    const b = bandBox();
+    LS.set("band", JSON.stringify({ x: b.x, y: b.y, w: b.w, h: b.h }));
+  }
+
+  function clearBand() {
+    const root = document.documentElement.style;
+    ["--bx", "--by", "--bw", "--bh"].forEach((v) => root.removeProperty(v));
+    LS.set("band", "");
+    if (prompter) prompter.measure();
+  }
+
+  // 恢复上次的尺寸（屏幕转过了也要夹回视口内）
+  (function restoreBand() {
+    const raw = LS.get("band", "");
+    if (!raw) return;
+    try {
+      const b = JSON.parse(raw);
+      const vw = innerWidth, vh = innerHeight;
+      setBand({
+        x: Math.max(0, Math.min(b.x, vw - BAND_MIN_W)),
+        y: Math.max(0, Math.min(b.y, vh - BAND_MIN_H)),
+        w: Math.max(BAND_MIN_W, Math.min(b.w, vw)),
+        h: Math.max(BAND_MIN_H, Math.min(b.h, vh)),
+      });
+    } catch (_) {}
+  })();
+
+  function dragStart(e, mode, corner) {
+    e.preventDefault();
+    e.stopPropagation();
+    const start = bandBox();
+    const sx = e.clientX, sy = e.clientY;
+    const vw = innerWidth, vh = innerHeight;
+    let moved = false;
+
+    band.classList.add("dragging");
+    const handle = mode === "resize"
+      ? band.querySelector('.h[data-h="' + corner + '"]') : null;
+    if (handle) handle.classList.add("active");
+
+    const target = e.currentTarget;
+    if (target.setPointerCapture) {
+      try { target.setPointerCapture(e.pointerId); } catch (_) {}
+    }
+
+    function onMove(ev) {
+      const dx = ev.clientX - sx, dy = ev.clientY - sy;
+      if (!moved && Math.abs(dx) + Math.abs(dy) > 4) moved = true;
+      if (!moved) return;
+
+      let { x, y, w, h } = start;
+      if (mode === "move") {
+        x = Math.max(0, Math.min(start.x + dx, vw - start.w));
+        y = Math.max(0, Math.min(start.y + dy, vh - start.h));
+      } else {
+        // 四个角分别决定哪条边跟着动，对边固定
+        if (corner === "nw" || corner === "sw") {
+          const nx = Math.max(0, Math.min(start.x + dx, start.x + start.w - BAND_MIN_W));
+          w = start.x + start.w - nx; x = nx;
+        } else {
+          const nw = Math.max(BAND_MIN_W, Math.min(start.w + dx, vw - start.x));
+          w = nw;
+        }
+        if (corner === "nw" || corner === "ne") {
+          const ny = Math.max(0, Math.min(start.y + dy, start.y + start.h - BAND_MIN_H));
+          h = start.y + start.h - ny; y = ny;
+        } else {
+          h = Math.max(BAND_MIN_H, Math.min(start.h + dy, vh - start.y));
+        }
+      }
+      setBand({ x, y, w, h });
+      // 边拖边重排：字号没变但可用宽度变了，重新量一次更稳
+      if (prompter) prompter.measure();
+    }
+
+    function onUp() {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      band.classList.remove("dragging");
+      if (handle) handle.classList.remove("active");
+      if (moved) {
+        saveBand();
+        if (prompter && prompter.curIdx >= 0) prompter.scrollTo(prompter.curIdx, false);
+      }
+    }
+
+    window.addEventListener("pointermove", onMove, { passive: false });
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+  }
+
+  // 拖带子本体 = 移动
+  band.addEventListener("pointerdown", (e) => {
+    if (e.target.classList && e.target.classList.contains("h")) return;
+    dragStart(e, "move");
+  });
+  // 四角 = 缩放
+  band.querySelectorAll(".h").forEach((h) => {
+    h.addEventListener("pointerdown", (e) => dragStart(e, "resize", h.dataset.h));
+  });
+  $("btnBandReset").onclick = () => { clearBand(); log("提词带已恢复默认"); };
+
+  // ================= 录制审阅 =================
+  let reviewInfo = null;
+
+  function showReview(j) {
+    reviewInfo = j;
+    const canPlay = !!(j && j.final);
+    const mb = j ? (j.bytes / 1048576).toFixed(1) : "0";
+    $("rvMeta").textContent = j
+      ? `${j.parts} 片 · ${mb} MB · ${j.durationS}s`
+      : "没有拿到录像信息";
+    const errEl = $("rvErr");
+    if (j && j.error) {
+      errEl.textContent = j.error;
+      errEl.style.display = "block";
+    } else {
+      errEl.style.display = "none";
+    }
+    const v = $("rvVid");
+    if (canPlay) {
+      v.style.display = "block";
+      v.src = "/api/rec/" + j.sid + "/file";
+    } else {
+      v.style.display = "none";
+      v.removeAttribute("src");
+    }
+    $("btnKeep").style.display = canPlay ? "block" : "none";
+    $("btnDrop").textContent = canPlay ? "丢弃" : "知道了";
+    $("review").classList.add("show");
+  }
+
+  function hideReview() {
+    const v = $("rvVid");
+    try { v.pause(); } catch (_) {}
+    v.removeAttribute("src");
+    try { v.load(); } catch (_) {}
+    $("review").classList.remove("show");
+    reviewInfo = null;
+  }
+
+  $("btnKeep").onclick = () => {
+    if (reviewInfo) {
+      log("已保存：" + reviewInfo.sid + "（recordings/" + reviewInfo.sid + "/final.mp4）");
+      chip("chipRec", "已保存", "good");
+    }
+    hideReview();
+    $("setup").classList.add("show");
+  };
+
+  $("btnDrop").onclick = async () => {
+    if (!reviewInfo || !reviewInfo.final) { hideReview(); $("setup").classList.add("show"); return; }
+    const sid = reviewInfo.sid;
+    $("btnDrop").disabled = true;
+    try {
+      const res = await fetch("/api/rec/" + sid + "/discard", { method: "POST" });
+      const j = await res.json();
+      if (j.ok) {
+        log("已丢弃：" + sid);
+        chip("chipRec", "已丢弃", "");
+      } else {
+        log("丢弃失败：" + (j.error || "未知"));
+        alert("丢弃失败：" + (j.error || "未知"));
+      }
+    } catch (exc) {
+      log("丢弃请求失败：" + exc.message);
+    }
+    $("btnDrop").disabled = false;
+    hideReview();
+    $("setup").classList.add("show");
+  };
+
+  // ---- 取后端配置 ----
+  async function loadCfg() {
+    try {
+      cfg = await (await fetch("/api/config", { cache: "no-store" })).json();
+    } catch (exc) {
+      log("拿不到 /api/config：" + exc.message);
+    }
+    prompter = new Prompter(cfg.prompt, els);
+    prompter.setLead(parseInt(LS.get("lead", "3"), 10));
+    applyPrefs();
+    log("配置就绪，WebSocket 端口 " + (location.protocol === "https:"
+        ? cfg.wsPortPublic : cfg.wsPort));
+  }
+
+  // ---- 开始 ----
+  async function start() {
+    scriptText = scriptEl.value.trim();
+    if (!scriptText) { alert("先粘一段口播稿"); return; }
+    LS.set("script", scriptText);
+
+    // getUserMedia 必须由这次点击同步触发，中间不能有 await
+    capture = new Capture(cfg, {
+      onLevel: (db) => {
+        prompter.onLevel(db);
+        chip("chipLvl", "电平 " + db.toFixed(0) + "dB", db > -30 ? "good" : "");
+      },
+      onCursor: (m) => { if (!paused) prompter.onCursor(m); },
+      onChunk: (m) => { lastChunk = m.asr; },
+      onState: (m) => { lastState = m; updateHud(m); },
+      onRec: (m) => {
+        if (m.t === "local") chip("chipRec", "录像 " + m.seq + " 片", "");
+        else if (m.discarded) chip("chipRec", "已丢弃", "");
+        else if (m.seq < 0) chip("chipRec", m.error ? "拼接有问题" : "录像完成",
+                                 m.error ? "bad" : "good");
+        else chip("chipRec", "已收 " + m.parts + " 片", m.error ? "bad" : "");
+        if (m.error) log("录像：" + m.error);
+      },
+      // 停止后等这一下：拿到成品信息才弹审阅面板
+      onRecDone: (j) => { showReview(j); },
+      onScriptAck: (m) => {
+        prompter.loadScript(scriptText, m.clauses);
+        log("后端已建索引：" + m.chars + " 字 / " + m.clauses.length + " 句");
+      },
+      onStatus: (s) => {
+        log(s.text);
+        if (s.kind === "ws-open") chip("chipWs", "已连接", "good");
+        if (s.kind === "ws-closed" || s.kind === "ws-error") chip("chipWs", "连接断开", "bad");
+        if (s.kind === "asr-ready") chip("chipAsr", s.text.replace("识别就绪：", ""), "good");
+        if (s.kind === "rec-off" || s.kind === "rec-error") chip("chipRec", "录像异常", "bad");
+      },
+    });
+
+    try {
+      $("kv").textContent = "正在申请权限……";
+      const st = await capture.start($("cam"), scriptText);
+      prompter.loadScript(scriptText, []);     // 先占位，等 script 回声再填真句
+      prompter.start();
+      $("setup").classList.remove("show");
+      $("ctrl").style.display = "flex";
+      kv.textContent = JSON.stringify(st, null, 1);
+      chip("chipAsr", "识别加载中", "");
+      log("采集就绪 " + st.video.width + "×" + st.video.height +
+          "@" + (st.video.frameRate || "?") + "fps  " + st.mime);
+    } catch (exc) {
+      const name = exc && exc.name ? exc.name : "Error";
+      let hint = exc.message || String(exc);
+      if (name === "NotAllowedError") {
+        hint = "被拒绝。可能是：非 HTTPS 页面 / 权限被拒 / 不在用户手势里。\n" +
+               "去「设置-Safari-相机与麦克风」确认，或换 Tailscale 的 https 域名。";
+      } else if (name === "NotReadableError") {
+        hint = "设备被占用：把后台的相机/微信/相机 App 都关掉再试。";
+      }
+      kv.textContent = name + ": " + hint;
+      log("启动失败 " + name + "：" + hint);
+      alert("启动失败：" + name + "\n" + hint);
+    }
+  }
+
+  let lastChunk = "";
+  function updateHud(m) {
+    const a = m.asr || {}, al = m.align || {};
+    // 后端跟不上会丢块，这是最要紧的告警
+    if (a.dropped > 0) chip("chipAsr", "跟不上，丢了 " + a.dropped + " 块", "bad");
+    else if (a.rtf) chip("chipAsr", "RTF " + a.rtf.toFixed(2) + " · " +
+           (a.meanMs || 0) + "ms", a.rtf < 0.5 ? "good" : "");
+    const total = (al.progress || 0);
+    $("meterP").style.width = (Math.min(1, total) * 100).toFixed(1) + "%";
+  }
+
+  // ---- 控件 ----
+  $("btnStart").onclick = start;
+  $("btnResume").onclick = () => { $("setup").classList.remove("show"); };
+  $("btnSetup").onclick = () => { $("setup").classList.add("show"); };
+  $("btnStop").onclick = async () => {
+    const hadRec = !!(capture && capture.recSid);
+    const sidAtStop = capture ? capture.recSid : "";
+    if (capture) await capture.stop();
+    if (prompter) prompter.stop();
+    chip("chipWs", "已停止", "");
+    if (!hadRec) {
+      log("已停止（本次没有录像）");
+      $("setup").classList.add("show");
+      return;
+    }
+    log("已停止，正在拼接录像 " + sidAtStop + " …");
+    chip("chipRec", "拼接中…", "");
+    // 正常情况下 onRecDone 会弹审阅面板；万一没回调（异常/超时）也要给个出口
+    setTimeout(() => {
+      if (!$("review").classList.contains("show")) {
+        log("没等到拼接结果，直接回到设置");
+        $("setup").classList.add("show");
+      }
+    }, 12000);
+  };
+  $("btnReset").onclick = () => {
+    if (capture) capture.resetTo(0);
+    if (prompter) { prompter.disp = 0; prompter.velocity = 0; }
+    log("已重置到第 1 句");
+  };
+  $("btnPause").onclick = () => {
+    paused = !paused;
+    $("btnPause").textContent = paused ? "继续" : "暂停";
+    $("btnPause").className = "pill" + (paused ? " on" : "");
+    log(paused ? "已暂停跟随（稿子可手动看）" : "已恢复跟随");
+  };
+
+  // ---- 跑道条：显示外推位置 ----
+  setInterval(() => {
+    if (!prompter || !prompter.running) return;
+    const info = prompter.info();
+    const total = prompter.normTotal() || 1;
+    $("meterD").style.left = (Math.min(1, info.disp / total) * 100).toFixed(1) + "%";
+    if (lastState && lastState.asr && lastState.asr.rtf) {
+      $("chipLvl").textContent = "电平 " + info.dbfs.toFixed(0) + "dB / 门限 " +
+        info.gateDb.toFixed(0) + (info.frozen ? " · 停" : "");
+    }
+  }, 200);
+
+  // 回前台要重新申请屏幕常亮（切后台时会被自动释放）
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && capture && capture._shouldRun) capture._keepAwake();
+  });
+
+  // 转屏后把带子夹回视口，免得有一半跑到屏幕外
+  addEventListener("resize", () => {
+    if (!LS.get("band", "")) return;
+    const b = bandBox(), vw = innerWidth, vh = innerHeight;
+    setBand({
+      x: Math.max(0, Math.min(b.x, vw - BAND_MIN_W)),
+      y: Math.max(0, Math.min(b.y, vh - BAND_MIN_H)),
+      w: Math.max(BAND_MIN_W, Math.min(b.w, vw)),
+      h: Math.max(BAND_MIN_H, Math.min(b.h, vh)),
+    });
+    saveBand();
+  });
+
+  loadCfg();
+})();
+</script>
+</body>
+</html>
