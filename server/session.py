@@ -88,7 +88,8 @@ class Session:
         self.buf = AudioBuffer(self.acfg.chunk_samples)
         self.meter = LevelMeter(self.acfg)
         self.rec = Recorder(os.path.join(self.paths["root"], cfg["record"]["dir"]),
-                            keep_parts=bool(cfg["record"].get("keep_parts", True)))
+                            keep_parts=bool(cfg["record"].get("keep_parts", True)),
+                            loudnorm=bool(cfg["record"].get("loudnorm", True)))
 
         self.snap = Snapshot(gate_db=self.acfg.gate_db)
         self.frozen = True

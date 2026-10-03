@@ -65,6 +65,7 @@
     "width": 1440,
     "height": 1080,
     "fps": 30,
-    "keep_parts": true
+    "keep_parts": true,
+    "loudnorm": true
   }
 }

@@ -20,11 +20,12 @@
        注意每句还带 margin-bottom（--cl-gap），漏了它最后一行会被切掉半个。 */
     --band-h: calc((var(--fs) * var(--lh) + var(--cl-gap)) * var(--band-lines) + 20px);
 
-    /* 三态配色：未读灰 → 当前句白色 → 读过的黄色 */
-    --dim: rgba(255,255,255,.42);
+    /* 四态配色：已读熄灭 → 正在读的白 → 下一段的黄（眼睛的落点）→ 更远的灰 */
+    --dim: rgba(255,255,255,.40);
+    --done: rgba(255,255,255,.20);
     --cur: #ffffff;
-    --read: #FFD84D;
-    --read-soft: rgba(255,216,77,.58);
+    --next: #FFD84D;
+    --read: #FFD84D;   /* 强调黄：手柄激活、进度游标等装饰用 */
 
     /* 玻璃与描边 */
     --glass: rgba(16,17,20,.68);
@@ -68,19 +69,20 @@
   .cl{font-size:var(--fs);line-height:var(--lh);color:var(--dim);
       margin:0 0 var(--cl-gap);font-weight:500;
       transition:color .22s var(--ease)}
-  .cl.done{color:var(--read-soft)}            /* 已读过的整句：弱化黄 */
-  .cl.cur{color:var(--cur);font-weight:700}   /* 当前句：白 + 加粗 */
+  .cl.done{color:var(--done)}                  /* 已读过的：熄灭，不用再看 */
+  .cl.next{color:var(--next);font-weight:600}  /* 下一段：黄色，眼睛的落点 */
+  .cl.cur{color:var(--cur);font-weight:700}    /* 正在读的：白 + 加粗 */
   .wipe{display:inline}
-  /* 句内扫光：背景裁切到文字上做一条连续推进。
-     扫过的地方是黄色（＝读到的），没扫到的还是白色 —— 一眼看出读到哪个字。 */
+  /* 句内扫光：读过的字熄灭（变暗），还没读的保持亮白 ——
+     亮到哪里就是读到哪；黄色永远在下一段等着，视线不用回头找。 */
   .cl.cur .wipe{
     background-image:linear-gradient(90deg,
-      var(--read) 0 var(--wipe,0%), var(--cur) var(--wipe,0%) 100%);
+      var(--done) 0 var(--wipe,0%), var(--cur) var(--wipe,0%) 100%);
     -webkit-background-clip:text;background-clip:text;
     -webkit-text-fill-color:transparent;color:transparent}
-  /* 不支持 background-clip 的浏览器：当前句整句白，已读句整句弱黄 */
+  /* 不支持 background-clip 的浏览器：当前句整句白，已读句整句熄灭 */
   .no-wipe .cl.cur{color:var(--cur)}
-  .no-wipe .cl.done{color:var(--read-soft)}
+  .no-wipe .cl.done{color:var(--done)}
 
   /* 四角手柄：常驻低对比，拖动时变黄放大 */
   .h{position:absolute;width:42px;height:42px;z-index:3;touch-action:none;

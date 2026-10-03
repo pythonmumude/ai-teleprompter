@@ -54,9 +54,11 @@ class RecStatus:
 class Recorder:
     """一场录像的分片仓库。单用户自用，同一时刻只维护一场。"""
 
-    def __init__(self, root: str, keep_parts: bool = True) -> None:
+    def __init__(self, root: str, keep_parts: bool = True,
+                 loudnorm: bool = True) -> None:
         self.root = os.path.abspath(root)
         self.keep_parts = keep_parts
+        self.loudnorm = loudnorm
         self._lock = threading.RLock()
         self.status = RecStatus()
 
@@ -188,7 +190,20 @@ class Recorder:
         st.gaps = [i for i in range(1, mx + 1) if i not in st.parts]
 
     def _remux(self, src: str, dst: str, mime: str) -> tuple[bool, str]:
-        """把 fMP4 重排成可拖拽的普通 mp4。不重编码。"""
+        """把 fMP4 重排成可拖拽的普通 mp4。
+
+        音频过 loudnorm 响度归一（-16 LUFS，流媒体/播客标准）：手机录音电平
+        因场而异（实测峰值 -0.5 ~ -27dB 都有，随说话音量与距离波动），固定增益
+        会削波，loudnorm 自动适配并把真峰值钳在 -1.5dB。代价是音频轨重编码
+        （aac 192k，秒级），视频轨仍 -c:v copy 不损画质。loudnorm=False 退回纯 remux。
+        """
+        if self.loudnorm:
+            return self._run([
+                "ffmpeg", "-y", "-fflags", "+genpts", "-i", src,
+                "-af", "loudnorm=I=-16:TP=-1.5:LRA=11", "-ar", "48000",
+                "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+                "-movflags", "+faststart", dst,
+            ])
         return self._run([
             "ffmpeg", "-y", "-fflags", "+genpts", "-i", src,
             "-c", "copy", "-movflags", "+faststart", dst,

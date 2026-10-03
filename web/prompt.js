@@ -265,18 +265,26 @@
     }
 
     /**
-     * 标记「已读」：序号小于当前句的整句都算读过。
+     * 全量对齐句子的三种状态（为什么全量：光标回读 rewound 时标记必须能收回）。
      *
-     * 为什么是全量对齐、而不是只加不减：光标回读（rewound）时，
-     * 后面那些句子的标记必须收回来，否则会留下「已经读过」的假象。
+     *   done = 序号 < 当前句        → 熄灭（读过了，不用再看）
+     *   next = 序号 == 当前句 + 1   → 黄色（下一段，眼睛的落点）
+     *
+     * 黄色给「下一段」而不是「已读」，是因为人读的时候眼睛要**提前**找位置：
+     * 识别确认天生滞后约 2.5 字，黄色若跟确认走就成了「读完才标黄」；
+     * 而 next 由外推位置（领先于确认）直接推出，是确定性预告，永远跑在声音前面。
      * 先用 classList.contains 探一下，避免无谓地写 DOM。
      */
     markRead(idx) {
       const els = this.clEls || [];
       for (let i = 0; i < els.length; i++) {
         const done = i < idx;
+        const next = i === idx + 1;
         if (els[i].classList.contains("done") !== done) {
           els[i].classList.toggle("done", done);
+        }
+        if (els[i].classList.contains("next") !== next) {
+          els[i].classList.toggle("next", next);
         }
       }
     }
