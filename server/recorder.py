@@ -29,6 +29,26 @@ from dataclasses import dataclass, field
 MAX_PART_BYTES = 64 * 1024 * 1024
 
 
+def _resolve_bin(name: str) -> str:
+    """把裸命令名解析成可执行的绝对路径。
+
+    服务可能从精简 PATH 的环境启动（launchd、agent 后台任务），那些环境的
+    PATH 往往不含 /opt/homebrew/bin，shutil.which('ffmpeg') 会返回 None ——
+    真机上点「停止」就报「找不到 ffmpeg」。这里按常见安装位置兜底。
+    """
+    if os.path.sep in name:
+        return name
+    found = shutil.which(name)
+    if found:
+        return found
+    for cand in (f"/opt/homebrew/bin/{name}",
+                 f"/usr/local/bin/{name}",
+                 f"/usr/bin/{name}"):
+        if os.path.isfile(cand):
+            return cand
+    return name
+
+
 @dataclass
 class RecStatus:
     sid: str = ""
@@ -210,8 +230,10 @@ class Recorder:
         ])
 
     def _run(self, cmd: list[str]) -> tuple[bool, str]:
-        if shutil.which(cmd[0]) is None:
-            return False, f"找不到 {cmd[0]}"
+        # ⚠️ 服务可能从精简 PATH 的环境启动（launchd / agent 后台任务），
+        # shutil.which 找不到 /opt/homebrew/bin 下的 ffmpeg —— 真机点「停止」时
+        # 报「找不到 ffmpeg」（2026-10-03 踩过）。这里统一做路径解析兜底。
+        cmd = [_resolve_bin(cmd[0])] + cmd[1:]
         try:
             p = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
         except subprocess.TimeoutExpired:
@@ -222,11 +244,14 @@ class Recorder:
         return True, ""
 
     def _probe_duration(self, path: str) -> float:
-        if not os.path.isfile(path) or shutil.which("ffprobe") is None:
+        if not os.path.isfile(path):
+            return 0.0
+        ffprobe = _resolve_bin("ffprobe")
+        if shutil.which(ffprobe) is None:
             return 0.0
         try:
             p = subprocess.run([
-                "ffprobe", "-v", "error", "-show_entries", "format=duration",
+                ffprobe, "-v", "error", "-show_entries", "format=duration",
                 "-of", "default=nw=1:nk=1", path,
             ], capture_output=True, text=True, timeout=60)
             return float((p.stdout or "0").strip() or 0)
