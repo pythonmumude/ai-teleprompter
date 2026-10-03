@@ -157,6 +157,10 @@
   .btn.danger{background:#2a1717;color:#F7C1C1;border:1px solid rgba(226,75,74,.4)}
   .row{display:flex;align-items:center;gap:10px;margin:12px 0;font-size:13px;color:#b6b6bb}
   .row>span:first-child{width:64px;flex:none}
+  .row select{appearance:none;flex:1;background:#1e1f24;color:#eee;
+    border:1px solid #2c2d33;border-radius:10px;padding:9px 12px;
+    font-size:13.5px;font-family:inherit;outline:none;min-width:0}
+  .row select:focus{border-color:#3d3e46}
   .row input[type=range]{flex:1;-webkit-appearance:none;height:4px;border-radius:2px;
     background:#33343a;outline:none}
   .row input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;
@@ -192,6 +196,18 @@
   .rv-err{font-size:12.5px;color:#F7C1C1;background:#241618;
     border:1px solid rgba(226,75,74,.3);border-radius:12px;
     padding:10px;margin-bottom:12px;line-height:1.6}
+
+  /* ---------- 横屏布局 ----------
+     横屏屏幕矮而宽：提词带少显示两行、宽度铺满，字号默认给更大（见 JS 里的默认值）。
+     横屏时安全区落在左右两侧，env(safe-area-inset-top) 会自动变小，不必特殊处理。 */
+  @media (orientation: landscape) {
+    :root { --band-lines: 3; }
+    #band { left: var(--bx, 8px); width: var(--bw, calc(100% - 16px)); }
+    #lines { padding: 8px 18px; }
+    .h { width: 46px; height: 46px; }
+    .pill { padding: 7px 12px; font-size: 12.5px; }
+    #ctrl { gap: 6px; }
+  }
 </style>
 </head>
 <body>
@@ -247,6 +263,14 @@
     autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
 
   <div class="card">
+    <div class="row"><span>音源</span>
+      <select id="srcSel">
+        <option value="phone">手机麦克风</option>
+        <option value="mac">电脑麦克风</option>
+      </select></div>
+    <div class="row" id="macDevRow" style="display:none"><span>设备</span>
+      <select id="macDevSel"><option value="">（读取中…）</option></select></div>
+    <p id="macHint" style="margin:2px 0 10px;display:none"></p>
     <div class="row"><span>字号</span>
       <input type="range" id="fs" min="14" max="72" step="1" value="24">
       <span id="fsv" style="width:44px;text-align:right">24</span></div>
@@ -288,7 +312,9 @@
     set(k, v) { try { localStorage.setItem("tp." + k, v); } catch (_) {} },
   };
   scriptEl.value = LS.get("script", "");
-  $("fs").value = LS.get("fs", "24");
+  // 横屏屏幕矮而宽，默认字号给大一点更清楚（用户自己调过就用他的）
+  $("fs").value = LS.get("fs",
+    window.matchMedia("(orientation: landscape)").matches ? "30" : "24");
   $("lead").value = LS.get("lead", "3");
 
   function log(s) {
@@ -327,6 +353,68 @@
   $("btnFsDown").onclick = () => bumpFont(-2);
   $("btnFsUp").onclick = () => bumpFont(2);
 
+  // ---- 音源：手机麦 / 电脑麦 ----
+  //
+  // 页面只负责把选择告诉服务端（服务端单例，谁改都算数），
+  // 真正的采集在 server/macmic.py 里用 ffmpeg avfoundation 做。
+  const srcSel = $("srcSel"), macDevRow = $("macDevRow"), macDevSel = $("macDevSel");
+  srcSel.value = LS.get("src", "phone");
+
+  function syncSrcUi() {
+    const isMac = srcSel.value === "mac";
+    macDevRow.style.display = isMac ? "flex" : "none";
+    $("macHint").style.display = isMac ? "block" : "none";
+  }
+
+  const deviceValue = () => (macDevSel.value === "" ? "" : ":" + macDevSel.value);
+
+  async function loadMacDevices() {
+    try {
+      const j = await (await fetch("/api/audio/devices", { cache: "no-store" })).json();
+      const list = j.devices || [];
+      const saved = LS.get("macdev", "");
+      macDevSel.innerHTML = list.length
+        ? list.map((d) => '<option value="' + d.index + '">' + d.name +
+            (d.virtual ? "（虚拟设备）" : "") + "</option>").join("")
+        : '<option value="">（没找到输入设备）</option>';
+      if (saved && list.some((d) => d.index === saved)) macDevSel.value = saved;
+      const cur = list.find((d) => d.index === macDevSel.value);
+      $("macHint").textContent = (cur && cur.virtual)
+        ? "⚠️ 选中的是虚拟声卡（BlackHole 这类），它本身采不到真实声音 —— 请换成物理麦克风（USB 麦 / 耳麦），或在「系统设置 → 声音 → 输入」里把默认输入切过去。"
+        : "电脑麦克风由 Mac 本机采集，提词跟随和成品音轨都用它；手机只负责画面。";
+    } catch (_) {
+      macDevSel.innerHTML = '<option value="">（设备列表读取失败）</option>';
+    }
+  }
+
+  async function applyAudioSource() {
+    const src = srcSel.value;
+    try {
+      const url = "/api/audio/source?src=" + src + "&device=" +
+        encodeURIComponent(src === "mac" ? deviceValue() : "");
+      const j = await (await fetch(url, { method: "POST" })).json();
+      log(j.ok
+        ? ("音源：" + (src === "mac" ? "电脑麦克风" : "手机麦克风"))
+        : ("切音源失败：" + (j.error || "未知")));
+    } catch (exc) {
+      log("切音源请求失败：" + exc.message);
+    }
+  }
+
+  srcSel.onchange = () => {
+    LS.set("src", srcSel.value);
+    syncSrcUi();
+    if (srcSel.value === "mac") loadMacDevices();
+    applyAudioSource();
+  };
+  macDevSel.onchange = () => {
+    LS.set("macdev", macDevSel.value);
+    loadMacDevices();
+    applyAudioSource();
+  };
+  syncSrcUi();
+  if (srcSel.value === "mac") loadMacDevices();
+
   function chip(id, text, cls) {
     const el = $(id);
     el.textContent = text;
@@ -339,6 +427,12 @@
   // 这样「用户没动过」和「用户调过」是两种状态，恢复默认只需清掉变量。
   const BAND_MIN_W = 200, BAND_MIN_H = 84;
   const band = els.band;
+
+  // 横屏 / 竖屏各自记一套位置尺寸：手机转过来后布局完全不同，
+  // 共用一套会互相破坏（竖屏调好的窄带搬到横屏就不合适了）。
+  const isLandscape = () =>
+    window.matchMedia("(orientation: landscape)").matches;
+  const bandKey = () => (isLandscape() ? "band-l" : "band-p");
 
   function bandBox() {
     const r = band.getBoundingClientRect();
@@ -353,33 +447,41 @@
     root.setProperty("--bh", Math.round(box.h) + "px");
   }
 
+  function clearBandVars() {
+    const root = document.documentElement.style;
+    ["--bx", "--by", "--bw", "--bh"].forEach((v) => root.removeProperty(v));
+  }
+
   function saveBand() {
     const b = bandBox();
-    LS.set("band", JSON.stringify({ x: b.x, y: b.y, w: b.w, h: b.h }));
+    LS.set(bandKey(), JSON.stringify({ x: b.x, y: b.y, w: b.w, h: b.h }));
   }
 
   function clearBand() {
-    const root = document.documentElement.style;
-    ["--bx", "--by", "--bw", "--bh"].forEach((v) => root.removeProperty(v));
-    LS.set("band", "");
+    clearBandVars();
+    LS.set(bandKey(), "");
     if (prompter) prompter.measure();
   }
 
-  // 恢复上次的尺寸（屏幕转过了也要夹回视口内）
-  (function restoreBand() {
-    const raw = LS.get("band", "");
-    if (!raw) return;
-    try {
-      const b = JSON.parse(raw);
-      const vw = innerWidth, vh = innerHeight;
-      setBand({
-        x: Math.max(0, Math.min(b.x, vw - BAND_MIN_W)),
-        y: Math.max(0, Math.min(b.y, vh - BAND_MIN_H)),
-        w: Math.max(BAND_MIN_W, Math.min(b.w, vw)),
-        h: Math.max(BAND_MIN_H, Math.min(b.h, vh)),
-      });
-    } catch (_) {}
-  })();
+  /** 载入当前方向的尺寸并夹回视口（转屏后必须重做，否则会有一半跑到屏幕外）。 */
+  function restoreBand() {
+    clearBandVars();                      // 先清掉上一个方向的 inline 值
+    const raw = LS.get(bandKey(), "");
+    if (raw) {
+      try {
+        const b = JSON.parse(raw);
+        const vw = innerWidth, vh = innerHeight;
+        setBand({
+          x: Math.max(0, Math.min(b.x, vw - BAND_MIN_W)),
+          y: Math.max(0, Math.min(b.y, vh - BAND_MIN_H)),
+          w: Math.max(BAND_MIN_W, Math.min(b.w, vw)),
+          h: Math.max(BAND_MIN_H, Math.min(b.h, vh)),
+        });
+      } catch (_) {}
+    }
+    if (prompter) prompter.measure();
+  }
+  restoreBand();
 
   function dragStart(e, mode, corner) {
     e.preventDefault();
@@ -547,6 +649,9 @@
     if (!scriptText) { alert("先粘一段口播稿"); return; }
     LS.set("script", scriptText);
 
+    // 把当前音源选择交给 Capture：mac 时它只录视频轨、也不推 PCM
+    cfg.audio = Object.assign({}, cfg.audio, { source: srcSel.value });
+
     // getUserMedia 必须由这次点击同步触发，中间不能有 await
     capture = new Capture(cfg, {
       onLevel: (db) => {
@@ -670,9 +775,16 @@
     if (!document.hidden && capture && capture._shouldRun) capture._keepAwake();
   });
 
-  // 转屏后把带子夹回视口，免得有一半跑到屏幕外
+  // 转屏：横竖屏各有一套尺寸记忆，方向一变就换那一套；同方向内只夹回视口。
+  let lastLandscape = isLandscape();
   addEventListener("resize", () => {
-    if (!LS.get("band", "")) return;
+    const now = isLandscape();
+    if (now !== lastLandscape) {
+      lastLandscape = now;
+      restoreBand();                       // 换方向 → 载入该方向的一套（没有就回默认自适应）
+      return;
+    }
+    if (!LS.get(bandKey(), "")) return;
     const b = bandBox(), vw = innerWidth, vh = innerHeight;
     setBand({
       x: Math.max(0, Math.min(b.x, vw - BAND_MIN_W)),
@@ -684,6 +796,8 @@
   });
 
   loadCfg();
+  // 把本机偏好的音源推给服务端（服务端是单例，重启后要重新同步一次）
+  applyAudioSource();
 })();
 </script>
 </body>

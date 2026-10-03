@@ -21,7 +21,9 @@
     "gate_floor_window_frames": 30,
     "stop_frames": 3,
     "resume_frames": 2,
-    "queue_max": 40
+    "queue_max": 40,
+    "source": "phone",
+    "mac_device": ""
   },
   "asr": {
     "model": "paraformer-zh-streaming",

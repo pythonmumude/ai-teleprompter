@@ -138,7 +138,11 @@ class Recorder:
 
             final = os.path.join(st.dir, "final.mp4")
             st.final_path = final
-            ok, msg = self._remux(merged, final, st.mime)
+            # 电脑收音时 MacMic 会在同一目录写 mac.wav —— 有就拿它当成品音轨
+            ext = os.path.join(st.dir, "mac.wav")
+            if os.path.isfile(ext) and os.path.getsize(ext) <= 44:
+                ext = ""            # 只有 44 字节的 wav 头 = 没采到东西，别拿它替
+            ok, msg = self._remux(merged, final, st.mime, ext)
             if not ok:
                 # 兜底 1：concat demuxer（对同源 mp4 分片常常有效）
                 lst = os.path.join(st.dir, "list.txt")
@@ -209,25 +213,30 @@ class Recorder:
         mx = max(st.parts)
         st.gaps = [i for i in range(1, mx + 1) if i not in st.parts]
 
-    def _remux(self, src: str, dst: str, mime: str) -> tuple[bool, str]:
+    def _remux(self, src: str, dst: str, mime: str,
+               ext_audio: str = "") -> tuple[bool, str]:
         """把 fMP4 重排成可拖拽的普通 mp4。
 
-        音频过 loudnorm 响度归一（-16 LUFS，流媒体/播客标准）：手机录音电平
-        因场而异（实测峰值 -0.5 ~ -27dB 都有，随说话音量与距离波动），固定增益
-        会削波，loudnorm 自动适配并把真峰值钳在 -1.5dB。代价是音频轨重编码
-        （aac 192k，秒级），视频轨仍 -c:v copy 不损画质。loudnorm=False 退回纯 remux。
+        ext_audio 给了就**用它替掉视频自带的音轨** —— 电脑收音时手机那段录像
+        只当画面用，声音来自 Mac 麦克风采的 wav（质量和响度都好得多）。
+
+        没给 ext_audio 时用视频自带音轨，并过 loudnorm 响度归一（-16 LUFS，
+        流媒体/播客标准）：手机录音电平因场而异（实测峰值 -0.5 ~ -27dB 都有），
+        固定增益会削波，loudnorm 自动适配并把真峰值钳在 -1.5dB。
+        两种情况视频轨都走 -c:v copy，不损画质。
         """
-        if self.loudnorm:
-            return self._run([
-                "ffmpeg", "-y", "-fflags", "+genpts", "-i", src,
-                "-af", "loudnorm=I=-16:TP=-1.5:LRA=11", "-ar", "48000",
-                "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
-                "-movflags", "+faststart", dst,
-            ])
-        return self._run([
-            "ffmpeg", "-y", "-fflags", "+genpts", "-i", src,
-            "-c", "copy", "-movflags", "+faststart", dst,
-        ])
+        use_ext = bool(ext_audio) and os.path.isfile(ext_audio)
+        args = ["ffmpeg", "-y", "-fflags", "+genpts", "-i", src]
+        if use_ext:
+            args += ["-i", ext_audio, "-map", "0:v", "-map", "1:a"]
+        if self.loudnorm or use_ext:
+            # 换音轨时音频本来就得重编码，顺带把响度归一一起做了
+            args += ["-af", "loudnorm=I=-16:TP=-1.5:LRA=11", "-ar", "48000",
+                     "-c:v", "copy", "-c:a", "aac", "-b:a", "192k"]
+        else:
+            args += ["-c", "copy"]
+        args += ["-movflags", "+faststart", dst]
+        return self._run(args)
 
     def _run(self, cmd: list[str]) -> tuple[bool, str]:
         # ⚠️ 服务可能从精简 PATH 的环境启动（launchd / agent 后台任务），

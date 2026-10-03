@@ -28,6 +28,7 @@ from . import protocol as P
 from .align import AlignConfig, Aligner, ScriptIndex
 from .asr import AsrConfig, StreamingAsr
 from .audio import AudioBuffer, AudioConfig, LevelMeter
+from .macmic import MacMic
 from .recorder import Recorder
 
 
@@ -52,6 +53,9 @@ class Snapshot:
     rec: dict = field(default_factory=dict)
     clients: int = 0
     started_at: float = 0.0
+    audio_source: str = "phone"
+    mac_frames: int = 0
+    mac_error: str = ""
 
     def as_dict(self) -> dict:
         return {
@@ -62,6 +66,8 @@ class Snapshot:
             "frames": self.frames, "chunksFed": self.chunks_fed,
             "audioMs": self.audio_ms, "lastAsr": self.last_asr,
             "asr": self.asr, "rec": self.rec, "clients": self.clients,
+            "audioSource": self.audio_source, "macFrames": self.mac_frames,
+            "macError": self.mac_error,
         }
 
 
@@ -91,7 +97,19 @@ class Session:
                             keep_parts=bool(cfg["record"].get("keep_parts", True)),
                             loudnorm=bool(cfg["record"].get("loudnorm", True)))
 
+        # 音源：phone = 手机上传（默认）／mac = 本机麦克风。
+        # Mac 采集的 PCM 走同一个 feed_pcm 入口，两条来源共用后面整条链路
+        # （电平 → 停顿检测 → ASR → 对齐），所以切源不影响其它任何逻辑。
+        acfg = cfg.get("audio", {}) or {}
+        self.audio_source = str(acfg.get("source", "phone"))
+        if self.audio_source not in ("phone", "mac"):
+            self.audio_source = "phone"
+        self.mac_device = str(acfg.get("mac_device", "") or "")
+        self.mac = MacMic(on_pcm=lambda pcm: self.feed_pcm(pcm, source="mac"),
+                          on_stats=self._on_mac_stats, log=print)
+
         self.snap = Snapshot(gate_db=self.acfg.gate_db)
+        self.snap.audio_source = self.audio_source
         self.frozen = True
         self._loop: asyncio.AbstractEventLoop | None = None
         self._subs: list[asyncio.Queue] = []
@@ -156,9 +174,14 @@ class Session:
 
     # ---------------- 音频 ----------------
 
-    def feed_pcm(self, data: bytes) -> int:
-        """收一帧 PCM（int16 LE）。返回吃掉的采样点数。"""
-        if not data:
+    def feed_pcm(self, data: bytes, source: str = "phone") -> int:
+        """收一帧 PCM（int16 LE）。返回吃掉的采样点数。
+
+        手机上传（WS 二进制帧）和本机麦克风采集都走这个入口 —— 区别只在上游
+        是谁在喂。音源切到 mac 之后手机那一路直接丢掉，免得两路音频混在一起
+        把识别和对齐搅乱（同理切回 phone 时丢掉本机采集的残留）。
+        """
+        if not data or source != self.audio_source:
             return 0
         pcm = np.frombuffer(data, dtype="<i2")
         if not pcm.size:
@@ -188,6 +211,53 @@ class Session:
 
         self._maybe_pub_state()
         return int(pcm.size)
+
+    # ---------------- 音源切换（手机麦 / 电脑麦） ----------------
+
+    def audio_devices(self) -> dict:
+        """列出本机可用输入设备（avfoundation），供前端下拉选择。"""
+        return {"devices": MacMic.list_devices(), "current": self.mac_device,
+                "source": self.audio_source}
+
+    def set_audio_source(self, src: str, device: str = "") -> dict:
+        if src not in ("phone", "mac"):
+            return {"ok": False, "error": "音源只能是 phone 或 mac"}
+        was = self.audio_source
+        self.audio_source = src
+        if device:
+            self.mac_device = device
+        self.snap.audio_source = src
+        if was == "mac" and src != "mac" and self.mac.running:
+            # 切回手机麦时把本机采集停掉，别让它白占着麦克风
+            self.mac.stop()
+        self.broadcast({"t": "audio-source", "source": src,
+                        "device": self.mac_device})
+        return {"ok": True, "source": src, "device": self.mac_device}
+
+    def _on_mac_stats(self, frames: int) -> None:
+        """MacMic 每收一块回调一次 —— 让 /api/state 也能看到实时帧数。
+
+        只在 state_msg() 里刷新是不够的：HTTP 的 /api/state 直接读 snap、
+        不经过 WS 广播，那样查出来永远是启动时的值（排查时会被误导）。
+        """
+        self.snap.mac_frames = frames
+        if self.mac.error:
+            self.snap.mac_error = self.mac.error
+
+    def mac_start(self, wav_path: str = "") -> dict:
+        """开始本机麦克风采集：一份喂识别，同时写 wav 当录像音轨。"""
+        if self.audio_source != "mac":
+            return {"ok": False, "error": "当前音源不是电脑麦克风"}
+        ok, err = self.mac.start(self.mac_device, wav_path)
+        self.snap.mac_error = err or self.mac.error
+        return {"ok": ok, "error": err, "device": self.mac_device,
+                "wav": wav_path}
+
+    def mac_stop(self) -> dict:
+        info = self.mac.stop()
+        self.snap.mac_frames = info.get("frames", 0)
+        self.snap.mac_error = info.get("error", "")
+        return {"ok": True, **info}
 
     def end_utterance(self) -> None:
         """收工：把残余补零解码掉，逼模型吐出最后一块。"""
@@ -227,6 +297,11 @@ class Session:
     def state_msg(self) -> dict:
         self.snap.asr = self.asr.stats().as_dict()
         self.snap.rec = self.rec.status_dict()
+        # 本机麦克风的实时状态：mac 音源下前端 HUD 靠它判断采集是否正常
+        self.snap.audio_source = self.audio_source
+        self.snap.mac_frames = self.mac.frames
+        if self.mac.error:
+            self.snap.mac_error = self.mac.error
         return P.state_msg(
             audio={"dbfs": self.snap.dbfs, "gateDb": self.snap.gate_db,
                    "speaking": self.snap.speaking, "frozen": self.frozen,

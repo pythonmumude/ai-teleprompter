@@ -52,6 +52,9 @@
       this.recSending = false;
       this.recDropped = 0;
       this._finishing = false;      // 「队列发完之后要拼接」的挂起标志
+      // 音源：phone = 手机麦（默认）／mac = 电脑麦克风。
+      // mac 时手机只当摄像头：不推 PCM、也不把手机麦录进视频。
+      this.audioSource = (cfg.audio && cfg.audio.source) || "phone";
       this.running = false;
       this.wakeLock = null;
       this.settings = {};
@@ -119,6 +122,7 @@
       await this._startAudio();
       this._openWs();
       this._startRecorder();
+      await this._startMacMic();     // 电脑收音时启动本机采集（含录像音轨）
       this._keepAwake();
       return this.settings;
     }
@@ -149,7 +153,8 @@
         }
         if (d.type === "pcm") {
           if (this.hooks.onLevel) this.hooks.onLevel(d.dbfs, d.seq);
-          this._sendPcm(d.pcm);
+          // 电脑收音时不推 PCM：识别由 Mac 采的音驱动，手机这一路上传纯属浪费
+          if (this.audioSource !== "mac") this._sendPcm(d.pcm);
         }
       };
 
@@ -261,8 +266,15 @@
 
       this.recSid = "rec" + Date.now().toString(36);
       this._finishing = false;       // 新一场开始，清掉上一场的挂起标志
+      // 电脑收音时这段录像只当画面用（声音由 Mac 采），所以只录视频轨 ——
+      // 否则会把手机麦那路差音轨也录进去，到服务端还得丢掉，白白占上行带宽。
+      let recStream = this.stream;
+      if (this.audioSource === "mac") {
+        const vt = this.stream.getVideoTracks()[0];
+        if (vt) recStream = new MediaStream([vt]);
+      }
       try {
-        this.rec = new MediaRecorder(this.stream, opts);
+        this.rec = new MediaRecorder(recStream, opts);
       } catch (exc) {
         this._status("rec-off", "MediaRecorder 起不来：" + exc.message);
         return;
@@ -277,8 +289,11 @@
         this._pumpParts(true);
       };
 
-      fetch("/api/rec/" + this.recSid + "/begin?mime=" + encodeURIComponent(mime),
-            { method: "POST" })
+      // begin 的 promise 存起来：电脑收音时要在它落地之后再开本机采集，
+      // 否则服务端还不知道 rec.sid，采到的 wav 就没有地方可落
+      this._beginP = fetch(
+        "/api/rec/" + this.recSid + "/begin?mime=" + encodeURIComponent(mime),
+        { method: "POST" })
         .then(() => this._status("rec-on", "开始录像 " + mime))
         .catch(() => this._status("rec-error", "录像会话建不起来"));
 
@@ -355,6 +370,38 @@
       if (this.hooks.onRecDone) this.hooks.onRecDone(j);
     }
 
+    // ---------------- 电脑收音 ----------------
+    //
+    // mac 音源下音频全部由 Mac 本机采集（见 server/macmic.py），手机这边
+    // 只负责画面：不推 PCM、MediaRecorder 也只录视频轨。采集的 wav 落在
+    // 录像会话目录里，收工时由服务端拼进成品当音轨。
+
+    async _startMacMic() {
+      if (this.audioSource !== "mac") return;
+      try { await (this._beginP || Promise.resolve()); } catch (_) {}
+      try {
+        const res = await fetch("/api/audio/mac/start", { method: "POST" });
+        const j = await res.json();
+        if (j.ok) {
+          this._status("mac-on",
+            `电脑麦克风已开${j.device ? "（" + j.device + "）" : ""}`);
+        } else {
+          this._status("mac-error", "电脑麦克风起不来：" + (j.error || "未知"));
+        }
+      } catch (exc) {
+        this._status("mac-error", "电脑麦克风请求失败：" + exc.message);
+      }
+    }
+
+    async _stopMacMic() {
+      if (this.audioSource !== "mac") return;
+      try {
+        const res = await fetch("/api/audio/mac/stop", { method: "POST" });
+        const j = await res.json();
+        if (j && j.wav) this._status("mac-off", `电脑录音已收尾（${j.frames} 帧）`);
+      } catch (_) {}
+    }
+
     // ---------------- 常亮 / 生命周期 ----------------
 
     async _keepAwake() {
@@ -374,6 +421,8 @@
       this._shouldRun = false;
       this.running = false;
       try { if (this.rec && this.rec.state !== "inactive") this.rec.stop(); } catch (_) {}
+      // 先给本机采集收尾：wav 头必须写完，后面的 finalize 才读得到那条音轨
+      await this._stopMacMic();
       try { if (this.worklet) { this.worklet.port.postMessage({ cmd: "stop" }); this.worklet.disconnect(); } } catch (_) {}
       try { if (this.audioCtx) await this.audioCtx.close(); } catch (_) {}
       try { if (this.ws) this.ws.close(); } catch (_) {}

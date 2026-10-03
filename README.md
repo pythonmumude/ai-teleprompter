@@ -220,6 +220,25 @@ $PY server/replay.py --realtime --wav tests/fixtures/say_clauses.wav \
 
 ---
 
+## 音源：手机麦 / 电脑麦
+
+默认手机收音。也可以让 **Mac 本机麦克风**收音 —— 提词跟随和成品音轨都用它，
+手机只当摄像头（`capture.js` 会改用 video-only 的 MediaStream 录制，省掉一半上行流量）。
+
+切换方式：设置面板顶部「音源」下拉（`POST /api/audio/source?src=mac&device=:<idx>`）。
+
+实现要点：
+
+- `server/macmic.py` 用 `ffmpeg -f avfoundation -i ":<设备>" -f s16le -` 采 raw PCM，
+  **一份喂识别、一份写 wav**：PCM 直接交给 `Session.feed_pcm(source="mac")`
+  （和手机上传走同一个入口，所以电平/停顿检测/对齐/ASR 全都不用改），
+  wav 落在录像目录里，finalize 时由 `recorder._remux(ext_audio=...)` 替换掉视频原音轨。
+- 设备列表由 `GET /api/audio/devices` 提供，**必须让用户选**，不能硬编码索引 ——
+  本机的默认输入就是 BlackHole 虚拟声卡，采它等于采静音（前端会标出「虚拟设备」）。
+- 想让别人也能用这个能力，注意本机要**有物理麦克风**：Mac mini 没有内置麦。
+
+---
+
 ## 录像
 
 Safari 的 MediaRecorder 默认就是 **10 Mbps H.264**（实测 1080p 约 9.75Mbps），
@@ -283,7 +302,8 @@ ai-teleprompter/
 │   ├── asr.py              流式引擎（阻塞推理关进独立线程，MPS）
 │   ├── audio.py            16k 缓冲、dBFS、自适应静音门控
 │   ├── web.py              HTTP（标准库，含目录穿越防护）
-│   ├── recorder.py         录像分片落盘 + ffmpeg 拼接
+│   ├── recorder.py         录像分片落盘 + ffmpeg 拼接（含响度归一 / 换音轨）
+│   ├── macmic.py           本机麦克风采集（电脑收音：一份喂识别、一份写 wav）
 │   ├── protocol.py         WS 消息定义
 │   └── replay.py           ★ 离线回放（不用手机就能调参）
 ├── web/

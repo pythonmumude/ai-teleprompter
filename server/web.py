@@ -79,6 +79,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, sess.snap.as_dict())
         if path == "/api/config":
             return self._json(200, self._public_config(sess))
+        if path == "/api/audio/devices":
+            return self._json(200, sess.audio_devices())
         if path.startswith("/api/rec/"):
             parts = [p for p in path.split("/") if p]
             # /api/rec/<sid> 或 /api/rec/<sid>/file
@@ -128,6 +130,19 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/session/end":
             sess.end_utterance()
             return self._json(200, {"ok": True})
+
+        # ---- 音源：手机麦 / 电脑麦 ----
+        if path == "/api/audio/source":
+            src = query.get("src", ["phone"])[0]
+            dev = query.get("device", [""])[0]
+            return self._json(200, sess.set_audio_source(src, dev))
+        if path == "/api/audio/mac/start":
+            # 采集的 wav 落在当前录像会话目录里，收工时用它替掉视频原音轨
+            st = sess.rec.status
+            wav = os.path.join(st.dir, "mac.wav") if st.sid and st.dir else ""
+            return self._json(200, sess.mac_start(wav))
+        if path == "/api/audio/mac/stop":
+            return self._json(200, sess.mac_stop())
 
         if path.startswith("/api/rec/"):
             parts = [p for p in path.split("/") if p]
